@@ -472,8 +472,9 @@ def getLeanIncRefN : CodegenM Func :=
     let (obj, fields) ← getLeanObject
     let objPtr ← obj.asJitType >>= (·.getPointer)
     let o ← ctx.newParam none objPtr "o"
-    let n ← ctx.newParam none (← ctx.getType TypeEnum.UnsignedInt) "n"
+    let n ← ctx.newParam none (← ctx.getType TypeEnum.SizeT) "n"
     let int ← ctx.getType TypeEnum.Int
+    let unsigned ← ctx.getType TypeEnum.UnsignedInt
     let leanIncRefN ← ctx.newFunction none FunctionKind.AlwaysInline void "lean_inc_ref_n" #[o, n] false
     let block ← leanIncRefN.newBlock "entry"
     let o' ← o.asRValue
@@ -493,12 +494,88 @@ def getLeanIncRefN : CodegenM Func :=
     let onNotPersistent ← leanIncRefN.newBlock "not_persistent"
     onFalse.endWithConditional none cmp onNotPersistent onPersistent
     -- On not persistent, call lean_inc_ref_cold(o);
-    let call ← ctx.newCall none (← getLeanIncRefNCold) #[o', n']
+    let call ← ctx.newCall none (← getLeanIncRefNCold) #[o', (← ctx.newCast none n' unsigned)]
     onNotPersistent.addEval none call
     onNotPersistent.endWithVoidReturn none
     -- On persistent, do nothing
     onPersistent.endWithVoidReturn none
     pure leanIncRefN
+
+def getLeanDecRefCold : CodegenM Func := do
+  let ctx ← getCtx
+  let void ← ctx.getType TypeEnum.Void
+  let objPtr ← getLeanObjPtr
+  importFunction "lean_dec_ref_cold" void #[("o", objPtr)]
+
+def getLeanDecRef : CodegenM Func := 
+  getOrCreateFunction "lean_dec_ref" do
+    let ctx ← getCtx
+    let void ← ctx.getType TypeEnum.Void
+    let (obj, fields) ← getLeanObject
+    let objPtr ← obj.asJitType >>= (·.getPointer)
+    let o ← ctx.newParam none objPtr "o"
+    let leanDecRef ← ctx.newFunction none FunctionKind.AlwaysInline void "lean_dec_ref" #[o] false
+    let block ← leanDecRef.newBlock "entry"
+    let o' ← o.asRValue
+    let m_rc := fields.getD 0 (← errorField)
+    let access ← o'.dereferenceField none $ m_rc
+    let one ← ctx.one (← ctx.getType TypeEnum.Int)
+    let isNonExclusize ← ctx.newComparison none Comparison.GT (← access.asRValue) one >>= likely
+    let nonExclusive ← leanDecRef.newBlock "non_exlucsive"
+    let exclusive ← leanDecRef.newBlock "exclusive"
+    block.endWithConditional none isNonExclusize nonExclusive exclusive
+    -- On non_exlucsive, o->m_rc -= 1;
+    nonExclusive.addAssignmentOp none access BinaryOp.Minus one
+    nonExclusive.endWithVoidReturn none
+    -- On exclusive, check m_rc != 0
+    let cmp ← ctx.newComparison none Comparison.NE (← access.asRValue) (← ctx.zero (← ctx.getType TypeEnum.Int))
+    let onPersistent ← leanDecRef.newBlock "persistent"
+    let onNotPersistent ← leanDecRef.newBlock "not_persistent"
+    exclusive.endWithConditional none cmp onNotPersistent onPersistent
+    -- On not persistent, call lean_dec_ref_cold(o);
+    let call ← ctx.newCall none (← getLeanDecRefCold) #[o']
+    onNotPersistent.addEval none call
+    onNotPersistent.endWithVoidReturn none
+    -- On persistent, do nothing
+    onPersistent.endWithVoidReturn none
+    pure leanDecRef
+
+private def ifNotScalar (name : String)  (onNotScalar : Block → RValue → CodegenM Unit) (extraParam : Array LeanGccJit.Core.Param := #[]) : CodegenM Func := 
+  getOrCreateFunction name do 
+    let ctx ← getCtx
+    let void ← ctx.getType TypeEnum.Void
+    let objPtr ← getLeanObjPtr
+    let o ← ctx.newParam none objPtr "o"
+    let func ← ctx.newFunction none FunctionKind.AlwaysInline void name (#[o] ++ extraParam) false
+    let block ← func.newBlock "entry"
+    let o' ← o.asRValue
+    let isScalar ← ctx.newCall none (← getLeanIsScalar) #[o']
+    let scalar ← func.newBlock "scalar"
+    let notScalar ← func.newBlock "not_scalar"
+    block.endWithConditional none isScalar scalar notScalar
+    scalar.endWithVoidReturn none
+    onNotScalar notScalar o'
+    notScalar.endWithVoidReturn none
+    pure func
+
+def getLeanInc : CodegenM Func := 
+  ifNotScalar "lean_inc" fun block o' => 
+    getCtx >>= (do ·.newCall none (← getLeanIncRef) #[o']) >>= (block.addEval none ·)
+
+def getLeanIncN : CodegenM Func := do 
+  let ctx ← getCtx
+  let n ← ctx.newParam none (← ctx.getType TypeEnum.SizeT) "n"
+  ifNotScalar "lean_inc_n" (fun block o' => 
+    getCtx >>= (do ·.newCall none (← getLeanIncRefN) #[o', (← n.asRValue)]) >>= (block.addEval none ·))
+    #[n]
+
+
+def getLeanDec : CodegenM Func :=
+  ifNotScalar "lean_dec" fun block o' => 
+    getCtx >>= (do ·.newCall none (← getLeanDecRef) #[o']) >>= (block.addEval none ·)
+
+    
+  
     
 
 def callLeanBox (value : RValue) : CodegenM RValue := do
