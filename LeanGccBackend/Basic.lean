@@ -26,11 +26,13 @@ structure GccContext where
   ctx        : Context
 
 structure State where
-  rvalueMap : HashMap VarId RValue
-  blockMap  : HashMap JoinPointId Block
-  funcMap   : HashMap String Func
-  globalMap : HashMap String LValue
-  structMap : HashMap String (Struct × Array Field)
+  rvalueMap   : HashMap VarId RValue
+  blockMap    : HashMap JoinPointId Block
+  funcMap     : HashMap String Func
+  constantMap : HashMap String RValue
+  globalMap   : HashMap String LValue
+  structMap   : HashMap String (Struct × Array Field)
+  deriving Inhabited
 
 abbrev Error := String
 
@@ -47,6 +49,14 @@ def getOrCreateFunction (name : String) (create : CodegenM Func) : CodegenM Func
     modify fun s => { s with funcMap := s.funcMap.insert name f }
     pure f
 
+def getOrCreateConstant (name : String) (create : CodegenM RValue) : CodegenM RValue :=  do
+  match (← get).constantMap.find? name with
+  | some rv => pure rv
+  | none   => do
+    let rv ← create
+    modify fun s => { s with constantMap := s.constantMap.insert name rv }
+    pure rv
+
 def getOrCreateStruct (name : String) 
   (create : CodegenM (Struct × Array Field)) : CodegenM (Struct × Array Field) := do
   match (← get).structMap.find? name with
@@ -56,3 +66,24 @@ def getOrCreateStruct (name : String)
     modify fun s => { s with structMap := s.structMap.insert name st }
     pure st
 
+def errorField : CodegenM Field := do
+  let ctx ← getCtx
+  let void ← ctx.getType TypeEnum.Bool
+  ctx.newField none void "_error"
+
+def getBuiltinFunc (name : String) : CodegenM Func :=
+  getCtx >>= (·.getBuiltinFunction name)
+
+def likely (x : RValue) : CodegenM RValue := do
+  let ctx ← getCtx
+  let one ← ctx.one (← ctx.getType TypeEnum.Long)
+  let x ← ctx.newCast none x (← ctx.getType TypeEnum.Long)
+  let res ← ctx.newCall none (← getBuiltinFunc "__builtin_expect") #[x, one]
+  ctx.newCast none res (← ctx.getType TypeEnum.Bool)
+
+def unlikely (x : RValue) : CodegenM RValue := do
+  let ctx ← getCtx
+  let zero ← ctx.zero (← ctx.getType TypeEnum.Long)
+  let x ← ctx.newCast none x (← ctx.getType TypeEnum.Long)
+  let res ← ctx.newCall none (← getBuiltinFunc "__builtin_expect") #[x, zero]
+  ctx.newCast none res (← ctx.getType TypeEnum.Bool)
