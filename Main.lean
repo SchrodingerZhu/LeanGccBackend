@@ -13,10 +13,22 @@ def main : IO Unit := do
   }
   let state : GccJit.State := default 
   ctx.setIntOption IntOption.OptimizationLevel 3
-  -- let _ ← GccJit.getLeanIncRefN.run state context
-  -- let _ ← GccJit.getLeanIncRef.run state context
-  let _ ← GccJit.getLeanAllocSmallObject.run state context
-  let _ ← GccJit.getLeanAllocCtorMemory.run state context
+  let ops := do
+    let _ ← GccJit.getLeanBox
+    let _ ← GccJit.getLeanUnbox
+    let _ ← GccJit.getLeanPtrTag
+    let _ ← GccJit.getLeanPtrOther
+    let _ ← GccJit.getLeanAllocSmallObject
+    let _ ← GccJit.getLeanAllocCtorMemory
+    let _ ← GccJit.getLeanIsMT
+    let _ ← GccJit.getLeanIncRef
+    let _ ← GccJit.getLeanIncRefN
+    let _ ← GccJit.getLeanDecRef
+    let _ ← GccJit.getLeanInc
+    let _ ← GccJit.getLeanIncN
+    let _ ← GccJit.getLeanDec
+  
+  let _ ← ops.run state context
   -- let _ ← GccJit.getLeanDecRef.run state context
   -- let _ ← GccJit.getLeanIncN.run state context
   ctx.setBoolOption BoolOption.DumpInitialGimple true

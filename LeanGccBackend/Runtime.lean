@@ -63,16 +63,16 @@ def getLeanClosureObject : CodegenM (Struct × Array Field) := do
 def getLeanBox : CodegenM Func := do
   mkFunction "lean_box" (← «lean_object*») #[((← size_t), "value")] fun blk params => do
     let value ← getParam! params 0
-    mkReturn blk $ (←(←(← value <<< (1 : UInt64)) ||| (1 : UInt64)) :::(←«lean_object*»))
+    mkReturn blk $ (←(←(← value <<< (1 : UInt64)) ||| (1 : UInt64)) ::! (←«lean_object*»))
 
 def getLeanUnbox : CodegenM Func := do
   mkFunction "lean_unbox" (← size_t) #[((← «lean_object*»), "value")] fun blk params => do
-    let value ← (←getParam! params 0) ::: (← size_t)
+    let value ← (←getParam! params 0) ::! (← size_t)
     mkReturn blk $ (← value >>> (1 : UInt64))
 
 def getLeanIsScalar : CodegenM Func := do
   mkFunction "lean_is_scalar" (← bool) #[((← «lean_object*»), "obj")] fun blk params => do
-    let obj ← (←getParam! params 0) ::: (← size_t)
+    let obj ← (←getParam! params 0) ::! (← size_t)
     mkReturn blk $ (←(←obj &&& (1 : UInt64)) =/= (0 : UInt64))
 
 -- -- TODO: lean_register_external_class (currently no needed)
@@ -159,7 +159,7 @@ def getLeanAllocCtorMemory : CodegenM Func := do
     let memory ← mkLocalVar blk (← «lean_object*») "memory"
     mkAssignment blk memory $
       (←(←call (←getLeanAllocSmall) ((←alignedSz ::: (←unsigned)), slot)) ::: (← «lean_object*»))
-    mkIfBranch blk (alignedSz ·>> sz) 
+    mkIfBranch blk (← alignedSz ·>> sz) 
       (fun then_ => do
         let memory' ← memory ::: (← size_t >>= (·.getPointer))
         let offset ← (← alignedSz / (← Constant.SIZE_T_SIZE)) - (1 : UInt64)
@@ -170,291 +170,138 @@ def getLeanAllocCtorMemory : CodegenM Func := do
       (fun else_ => mkReturn else_ memory)
 
 
+def getLeanSmallObjectSize : CodegenM Func := do
+  mkFunction "lean_small_object_size" (← unsigned) #[((← «lean_object*»), "o")] fun blk params => do
+    let o ← getParam! params 0
+    mkReturn blk $ (← call (← getLeanSmallMemSize) (←o ::: (← unsigned)))
 
--- def getLeanSmallObjectSize : CodegenM Func :=
---   getOrCreateFunction "lean_small_object_size" do
---     let ctx ← getCtx
---     let voidPtr ← ctx.getType TypeEnum.VoidPtr
---     let objPtr ← getLeanObjPtr
---     let o ← ctx.newParam none objPtr "o"
---     let unsigned ← ctx.getType TypeEnum.UnsignedInt
---     let leanSmallObjectSize ← ctx.newFunction none FunctionKind.AlwaysInline unsigned "lean_small_object_size" #[o] false
---     let block ← leanSmallObjectSize.newBlock "entry"
---     let casted ← ctx.newBitCast none (← o.asRValue) voidPtr
---     let size ← ctx.newCall none (← getLeanSmallMemSize) #[casted]
---     block.endWithReturn none size
---     pure leanSmallObjectSize
+def getLeanFreeSmallObject : CodegenM Func := do
+  mkFunction "lean_free_small_object" (← void) #[((← «lean_object*»), "o")] fun blk params => do
+    let o ← getParam! params 0
+    mkReturn blk $ (← call (← getLeanFreeSmall) (←o ::: (← «void*»)))
 
--- def getLeanFreeSmallObject : CodegenM Func :=
---   getOrCreateFunction "lean_free_small_object" do
---     let ctx ← getCtx
---     let void ← ctx.getType TypeEnum.Void
---     let objPtr ← getLeanObjPtr
---     let o ← ctx.newParam none objPtr "o"
---     let leanFreeSmallObject ← ctx.newFunction none FunctionKind.AlwaysInline void "lean_free_small_object" #[o] false
---     let block ← leanFreeSmallObject.newBlock "entry"
---     let casted ← ctx.newBitCast none (← o.asRValue) (← ctx.getType TypeEnum.VoidPtr)
---     let call ← ctx.newCall none (← getLeanFreeSmall) #[casted]
---     block.addEval none call
---     block.endWithVoidReturn none
---     pure leanFreeSmallObject
+def getLeanAllocObject : CodegenM Func := do
+  importFunction "lean_alloc_object" (← «lean_object*») #[((← size_t), "sz")]
 
--- def getLeanAllocObject : CodegenM Func := do
---   let ctx ← getCtx
---   let (← size_t) ← ctx.getType TypeEnum.SizeT
---   importFunction "lean_alloc_object" (← getLeanObjPtr) #[("sz", (← size_t))]
+def getLeanFreeObject : CodegenM Func := do
+  importFunction "lean_free_object" (← void) #[((← «lean_object*»), "o")]
 
--- def getLeanFreeObject : CodegenM Func := do
---   let ctx ← getCtx
---   let void ← ctx.getType TypeEnum.Void
---   let objPtr ← getLeanObjPtr
---   importFunction "lean_free_object" void #[("o", objPtr)]
+def getLeanPtrTag : CodegenM Func := do
+  mkFunction "lean_ptr_tag" (← uint8_t) #[((← «lean_object*»), "o")] fun blk params => do
+    let obj ← getParam! params 0
+    let ty ← getLeanObject
+    let res ← (← dereferenceField obj ty 3) ::: (← uint8_t)
+    mkReturn blk res
 
--- def getLeanPtrTag : CodegenM Func :=
---   getOrCreateFunction "lean_ptr_tag" do
---     let ctx ← getCtx
---     let uint8_t ← ctx.getType TypeEnum.UInt8
---     let (obj, fields) ← getLeanObject
---     let objPtr ← obj.asJitType >>= (·.getPointer)
---     let o ← ctx.newParam none objPtr "o"
---     let leanPtrTag ← ctx.newFunction none FunctionKind.AlwaysInline uint8_t "lean_ptr_tag" #[o] false
---     let block ← leanPtrTag.newBlock "entry"
---     let m_tag := fields.getD 3 (← errorField)
---     let access ← o.asRValue >>= (·.dereferenceField none $ m_tag) >>= (·.asRValue)
---     block.endWithReturn none access
---     pure leanPtrTag
+def getLeanPtrOther : CodegenM Func := do
+  mkFunction "lean_ptr_other" (← uint8_t) #[((← «lean_object*»), "o")] fun blk params => do
+    let obj ← getParam! params 0
+    let ty ← getLeanObject
+    let res ← (← dereferenceField obj ty 2) ::: (← uint8_t)
+    mkReturn blk res
 
--- def getLeanPtrOther : CodegenM Func :=
---   getOrCreateFunction "lean_ptr_other" do
---     let ctx ← getCtx
---     let uint8_t ← ctx.getType TypeEnum.UInt8
---     let (obj, fields) ← getLeanObject
---     let objPtr ← obj.asJitType >>= (·.getPointer)
---     let o ← ctx.newParam none objPtr "o"
---     let leanPtrOther ← ctx.newFunction none FunctionKind.AlwaysInline uint8_t "lean_ptr_other" #[o] false
---     let block ← leanPtrOther.newBlock "entry"
---     let m_other := fields.getD 2 (← errorField)
---     let access ← o.asRValue >>= (·.dereferenceField none $ m_other) >>= (·.asRValue)
---     block.endWithReturn none access
---     pure leanPtrOther
+def getLeanObjectByteSize : CodegenM Func := do
+  importFunction "lean_object_byte_size" (← size_t) #[((← «lean_object*»), "o")]
 
--- def getLeanObjectByteSize : CodegenM Func :=
---   getOrCreateFunction "lean_object_byte_size" do
---     let ctx ← getCtx
---     let (← size_t) ← ctx.getType TypeEnum.SizeT
---     let objPtr ← getLeanObjPtr
---     importFunction "lean_object_byte_size" (← size_t) #[("o", objPtr)]
+def getLeanIsMT : CodegenM Func := do
+  mkFunction "lean_is_mt" (← bool) #[((← «lean_object*»), "o")] fun blk params => do
+    let obj ← getParam! params 0
+    let ty ← getLeanObject
+    let res ← (← dereferenceField obj ty 0) ::: (← int)
+    mkReturn blk $ (← res <<· (0 : UInt64))
 
--- def getLeanIsMT : CodegenM Func := 
---   getOrCreateFunction "lean_is_mt" do
---     let ctx ← getCtx
---     let bool ← ctx.getType TypeEnum.Bool
---     let (obj, fields) ← getLeanObject
---     let objPtr ← obj.asJitType >>= (·.getPointer)
---     let o ← ctx.newParam none objPtr "o"
---     let leanIsMT ← ctx.newFunction none FunctionKind.AlwaysInline bool "lean_is_mt" #[o] false
---     let block ← leanIsMT.newBlock "entry"
---     let m_rc := fields.getD 0 (← errorField)
---     let access ← o.asRValue >>= (·.dereferenceField none $ m_rc) >>= (·.asRValue)
---     let cmp ← ctx.newComparison none Comparison.LT access (← ctx.zero (← ctx.getType TypeEnum.Int))
---     block.endWithReturn none cmp
---     pure leanIsMT
+def getLeanIsST : CodegenM Func := do
+  mkFunction "lean_is_st" (← bool) #[((← «lean_object*»), "o")] fun blk params => do
+    let obj ← getParam! params 0
+    let ty ← getLeanObject
+    let res ← (← dereferenceField obj ty 0) ::: (← int)
+    mkReturn blk $ (← res ·>> (0 : UInt64))
 
--- def getLeanIsST : CodegenM Func := 
---   getOrCreateFunction "lean_is_st" do
---     let ctx ← getCtx
---     let bool ← ctx.getType TypeEnum.Bool
---     let (obj, fields) ← getLeanObject
---     let objPtr ← obj.asJitType >>= (·.getPointer)
---     let o ← ctx.newParam none objPtr "o"
---     let leanIsST ← ctx.newFunction none FunctionKind.AlwaysInline bool "lean_is_st" #[o] false
---     let block ← leanIsST.newBlock "entry"
---     let m_rc := fields.getD 0 (← errorField)
---     let access ← o.asRValue >>= (·.dereferenceField none $ m_rc) >>= (·.asRValue)
---     let cmp ← ctx.newComparison none Comparison.GT access (← ctx.zero (← ctx.getType TypeEnum.Int))
---     block.endWithReturn none cmp
---     pure leanIsST
+def getLeanIsPersistent : CodegenM Func := do
+  mkFunction "lean_is_persistent" (← bool) #[((← «lean_object*»), "o")] fun blk params => do
+    let obj ← getParam! params 0
+    let ty ← getLeanObject
+    let res ← (← dereferenceField obj ty 0) ::: (← int)
+    mkReturn blk $ (← res === (1 : UInt64))
 
--- def getLeanIsPersistent : CodegenM Func := 
---   getOrCreateFunction "lean_is_persistent" do
---     let ctx ← getCtx
---     let bool ← ctx.getType TypeEnum.Bool
---     let (obj, fields) ← getLeanObject
---     let objPtr ← obj.asJitType >>= (·.getPointer)
---     let o ← ctx.newParam none objPtr "o"
---     let leanIsPersistent ← ctx.newFunction none FunctionKind.AlwaysInline bool "lean_is_persistent" #[o] false
---     let block ← leanIsPersistent.newBlock "entry"
---     let m_rc := fields.getD 0 (← errorField)
---     let access ← o.asRValue >>= (·.dereferenceField none $ m_rc) >>= (·.asRValue)
---     let cmp ← ctx.newComparison none Comparison.EQ access (← ctx.zero (← ctx.getType TypeEnum.Int))
---     block.endWithReturn none cmp
---     pure leanIsPersistent
+def getLeanIncRefCold : CodegenM Func := do
+  importFunction "lean_inc_ref_cold" (←void) #[((← «lean_object*»), "o")]
 
--- def getLeanIncRefCold : CodegenM Func := do
---   let ctx ← getCtx
---   let void ← ctx.getType TypeEnum.Void
---   let objPtr ← getLeanObjPtr
---   importFunction "lean_inc_ref_cold" void #[("o", objPtr)]
+def getLeanIncRefNCold : CodegenM Func := do
+  importFunction "lean_inc_ref_n_cold" (←void) #[((← «lean_object*»), "o"), ((← unsigned), "n")]
 
--- def getLeanIncRefNCold : CodegenM Func := do
---   let ctx ← getCtx
---   let void ← ctx.getType TypeEnum.Void
---   let objPtr ← getLeanObjPtr
---   let unsigned ← ctx.getType TypeEnum.UnsignedInt
---   importFunction "lean_inc_ref_n_cold" void #[("o", objPtr), ("n", unsigned)]
+def getLeanIncRef : CodegenM Func := do
+  mkFunction "lean_inc_ref" (← void)  #[((← «lean_object*»), "o")] fun blk params => do
+    let obj ← getParam! params 0
+    let ty ← getLeanObject
+    let isSingleThreaded ← call (← getLeanIsST) obj >>= likely
+    mkIfBranch blk isSingleThreaded
+      (fun then_ => do
+        let m_rc ← dereferenceField obj ty 0
+        mkAssignmentOp then_ BinaryOp.Plus m_rc (← constantOne (← int))
+        then_.endWithVoidReturn none
+      )
+      (fun else_ => do
+        mkEval else_ $ (← call (← getLeanIncRefCold) obj)
+        else_.endWithVoidReturn none
+      )
 
--- def getLeanIncRef : CodegenM Func := 
---   getOrCreateFunction "lean_inc_ref" do
---     let ctx ← getCtx
---     let void ← ctx.getType TypeEnum.Void
---     let (obj, fields) ← getLeanObject
---     let objPtr ← obj.asJitType >>= (·.getPointer)
---     let o ← ctx.newParam none objPtr "o"
---     let leanIncRef ← ctx.newFunction none FunctionKind.AlwaysInline void "lean_inc_ref" #[o] false
---     let block ← leanIncRef.newBlock "entry"
---     let o' ← o.asRValue
---     let isSt ← ctx.newCall none (← getLeanIsST) #[o'] >>= likely
---     let onTrue ← leanIncRef.newBlock "on_true"
---     let onFalse ← leanIncRef.newBlock "on_false"
---     block.endWithConditional none isSt onTrue onFalse
---     let m_rc := fields.getD 0 (← errorField)
---     let access ← o'.dereferenceField none $ m_rc
---     -- On true, o->m_rc += 1;
---     let one ← ctx.one (← ctx.getType TypeEnum.Int)
---     onTrue.addAssignmentOp none access BinaryOp.Plus one
---     onTrue.endWithVoidReturn none
---     -- On false, check m_rc != 0
---     let cmp ← ctx.newComparison none Comparison.NE (← access.asRValue) (← ctx.zero (← ctx.getType TypeEnum.Int))
---     let onPersistent ← leanIncRef.newBlock "persistent"
---     let onNotPersistent ← leanIncRef.newBlock "not_persistent"
---     onFalse.endWithConditional none cmp onNotPersistent onPersistent
---     -- On not persistent, call lean_inc_ref_cold(o);
---     let call ← ctx.newCall none (← getLeanIncRefCold) #[o']
---     onNotPersistent.addEval none call
---     onNotPersistent.endWithVoidReturn none
---     -- On persistent, do nothing
---     onPersistent.endWithVoidReturn none
---     pure leanIncRef
+def getLeanIncRefN : CodegenM Func := do
+  mkFunction "lean_inc_ref_n" (← void)  #[((← «lean_object*»), "o"), ((← unsigned), "n")] fun blk params => do
+    let obj ← getParam! params 0
+    let n ← getParam! params 1
+    let ty ← getLeanObject
+    let isSingleThreaded ← call (← getLeanIsST) obj >>= likely
+    mkIfBranch blk isSingleThreaded
+      (fun then_ => do
+        let m_rc ← dereferenceField obj ty 0
+        mkAssignmentOp then_ BinaryOp.Plus m_rc (← n ::: (← int))
+        then_.endWithVoidReturn none
+      )
+      (fun else_ => do
+        mkEval else_ $ (← call (← getLeanIncRefNCold) (obj, n))
+        else_.endWithVoidReturn none
+      )
 
--- def getLeanIncRefN : CodegenM Func := 
---   getOrCreateFunction "lean_inc_ref_n" do
---     let ctx ← getCtx
---     let void ← ctx.getType TypeEnum.Void
---     let (obj, fields) ← getLeanObject
---     let objPtr ← obj.asJitType >>= (·.getPointer)
---     let o ← ctx.newParam none objPtr "o"
---     let n ← ctx.newParam none (← ctx.getType TypeEnum.SizeT) "n"
---     let int ← ctx.getType TypeEnum.Int
---     let unsigned ← ctx.getType TypeEnum.UnsignedInt
---     let leanIncRefN ← ctx.newFunction none FunctionKind.AlwaysInline void "lean_inc_ref_n" #[o, n] false
---     let block ← leanIncRefN.newBlock "entry"
---     let o' ← o.asRValue
---     let n' ← n.asRValue
---     let isSt ← ctx.newCall none (← getLeanIsST) #[o'] >>= likely
---     let onTrue ← leanIncRefN.newBlock "on_true"
---     let onFalse ← leanIncRefN.newBlock "on_false"
---     block.endWithConditional none isSt onTrue onFalse
---     let m_rc := fields.getD 0 (← errorField)
---     let access ← o'.dereferenceField none $ m_rc
---     -- On true, o->m_rc += n;
---     onTrue.addAssignmentOp none access BinaryOp.Plus (← ctx.newCast none n' int)
---     onTrue.endWithVoidReturn none
---     -- On false, check m_rc != 0
---     let cmp ← ctx.newComparison none Comparison.NE (← access.asRValue) (← ctx.zero int)
---     let onPersistent ← leanIncRefN.newBlock "persistent"
---     let onNotPersistent ← leanIncRefN.newBlock "not_persistent"
---     onFalse.endWithConditional none cmp onNotPersistent onPersistent
---     -- On not persistent, call lean_inc_ref_cold(o);
---     let call ← ctx.newCall none (← getLeanIncRefNCold) #[o', (← ctx.newCast none n' unsigned)]
---     onNotPersistent.addEval none call
---     onNotPersistent.endWithVoidReturn none
---     -- On persistent, do nothing
---     onPersistent.endWithVoidReturn none
---     pure leanIncRefN
+def getLeanDecRefCold : CodegenM Func := do
+  importFunction "lean_dec_ref_cold" (←void) #[((← «lean_object*»), "o")]
 
--- def getLeanDecRefCold : CodegenM Func := do
---   let ctx ← getCtx
---   let void ← ctx.getType TypeEnum.Void
---   let objPtr ← getLeanObjPtr
---   importFunction "lean_dec_ref_cold" void #[("o", objPtr)]
+def getLeanDecRef : CodegenM Func := do
+  mkFunction "lean_dec_ref" (← void)  #[((← «lean_object*»), "o")] fun blk params => do
+    let obj ← getParam! params 0
+    let ty ← getLeanObject
+    let m_rc ← dereferenceField obj ty 0
+    let isNonExclusive ← (m_rc ·>> (1 : UInt64)) >>= likely
+    mkIfBranch blk isNonExclusive
+      (fun then_ => do
+        mkAssignmentOp then_ BinaryOp.Minus m_rc (← constantOne (← int))
+        then_.endWithVoidReturn none
+      )
+      (fun else_ => do
+        mkEval else_ $ (← call (← getLeanDecRefCold) obj)
+        else_.endWithVoidReturn none
+      )
 
--- def getLeanDecRef : CodegenM Func := 
---   getOrCreateFunction "lean_dec_ref" do
---     let ctx ← getCtx
---     let void ← ctx.getType TypeEnum.Void
---     let (obj, fields) ← getLeanObject
---     let objPtr ← obj.asJitType >>= (·.getPointer)
---     let o ← ctx.newParam none objPtr "o"
---     let leanDecRef ← ctx.newFunction none FunctionKind.AlwaysInline void "lean_dec_ref" #[o] false
---     let block ← leanDecRef.newBlock "entry"
---     let o' ← o.asRValue
---     let m_rc := fields.getD 0 (← errorField)
---     let access ← o'.dereferenceField none $ m_rc
---     let one ← ctx.one (← ctx.getType TypeEnum.Int)
---     let isNonExclusize ← ctx.newComparison none Comparison.GT (← access.asRValue) one >>= likely
---     let nonExclusive ← leanDecRef.newBlock "non_exlucsive"
---     let exclusive ← leanDecRef.newBlock "exclusive"
---     block.endWithConditional none isNonExclusize nonExclusive exclusive
---     -- On non_exlucsive, o->m_rc -= 1;
---     nonExclusive.addAssignmentOp none access BinaryOp.Minus one
---     nonExclusive.endWithVoidReturn none
---     -- On exclusive, check m_rc != 0
---     let cmp ← ctx.newComparison none Comparison.NE (← access.asRValue) (← ctx.zero (← ctx.getType TypeEnum.Int))
---     let onPersistent ← leanDecRef.newBlock "persistent"
---     let onNotPersistent ← leanDecRef.newBlock "not_persistent"
---     exclusive.endWithConditional none cmp onNotPersistent onPersistent
---     -- On not persistent, call lean_dec_ref_cold(o);
---     let call ← ctx.newCall none (← getLeanDecRefCold) #[o']
---     onNotPersistent.addEval none call
---     onNotPersistent.endWithVoidReturn none
---     -- On persistent, do nothing
---     onPersistent.endWithVoidReturn none
---     pure leanDecRef
+private def ifNotScalar (name : String)  (onNotScalar : Block → Array LeanGccJit.Core.Param → CodegenM Unit) (extraParam : Array (JitType × String) := #[]) : CodegenM Func := do
+  mkFunction name (← void)  (#[((← «lean_object*»), "o")] ++ extraParam) fun blk params => do
+    let obj ← getParam! params 0
+    let isScalar ← call (← getLeanIsScalar) obj
+    mkIfBranch blk isScalar
+      (fun then_ => then_.endWithVoidReturn none)
+      (fun else_ => do
+        onNotScalar else_ params
+        else_.endWithVoidReturn none
+      )
 
--- private def ifNotScalar (name : String)  (onNotScalar : Block → RValue → CodegenM Unit) (extraParam : Array LeanGccJit.Core.Param := #[]) : CodegenM Func := 
---   getOrCreateFunction name do 
---     let ctx ← getCtx
---     let void ← ctx.getType TypeEnum.Void
---     let objPtr ← getLeanObjPtr
---     let o ← ctx.newParam none objPtr "o"
---     let func ← ctx.newFunction none FunctionKind.AlwaysInline void name (#[o] ++ extraParam) false
---     let block ← func.newBlock "entry"
---     let o' ← o.asRValue
---     let isScalar ← ctx.newCall none (← getLeanIsScalar) #[o']
---     let scalar ← func.newBlock "scalar"
---     let notScalar ← func.newBlock "not_scalar"
---     block.endWithConditional none isScalar scalar notScalar
---     scalar.endWithVoidReturn none
---     onNotScalar notScalar o'
---     notScalar.endWithVoidReturn none
---     pure func
+def getLeanInc : CodegenM Func := 
+  ifNotScalar "lean_inc" fun block params => do
+    call (← getLeanIncRef) (← getParam! params 0) >>= mkEval block
 
--- def getLeanInc : CodegenM Func := 
---   ifNotScalar "lean_inc" fun block o' => 
---     getCtx >>= (do ·.newCall none (← getLeanIncRef) #[o']) >>= (block.addEval none ·)
+def getLeanIncN : CodegenM Func := do
+  ifNotScalar "lean_inc_n" (fun block params => do
+    call (← getLeanIncRefN) ((← getParam! params 0), (← getParam! params 1)) >>= mkEval block)
+    #[((← unsigned), "n")]
 
--- def getLeanIncN : CodegenM Func := do 
---   let ctx ← getCtx
---   let n ← ctx.newParam none (← ctx.getType TypeEnum.SizeT) "n"
---   ifNotScalar "lean_inc_n" (fun block o' => 
---     getCtx >>= (do ·.newCall none (← getLeanIncRefN) #[o', (← n.asRValue)]) >>= (block.addEval none ·))
---     #[n]
-
-
--- def getLeanDec : CodegenM Func :=
---   ifNotScalar "lean_dec" fun block o' => 
---     getCtx >>= (do ·.newCall none (← getLeanDecRef) #[o']) >>= (block.addEval none ·)
-
-    
-  
-    
-
--- def callLeanBox (value : RValue) : CodegenM RValue := do
---   let ctx ← getCtx
---   let leanBox ← getLeanBox
---   ctx.newCall none leanBox #[value]
-
--- def callLeanMarkPersistent (obj : RValue) : CodegenM RValue := do
---   let ctx ← getCtx
---   let leanMarkPersistent ← getLeanMarkPersistent
---   ctx.newCall none leanMarkPersistent #[obj]
+def getLeanDec : CodegenM Func := 
+  ifNotScalar "lean_dec" fun block params => do
+    call (← getLeanDecRef) (← getParam! params 0) >>= mkEval block

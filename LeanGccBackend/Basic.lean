@@ -66,11 +66,6 @@ def getOrCreateStruct (name : String)
     modify fun s => { s with structMap := s.structMap.insert name st }
     pure st
 
-def errorField : CodegenM Field := do
-  let ctx ← getCtx
-  let void ← ctx.getType TypeEnum.Bool
-  ctx.newField none void "_error"
-
 def getBuiltinFunc (name : String) : CodegenM Func :=
   getCtx >>= (·.getBuiltinFunction name)
 
@@ -92,6 +87,12 @@ def «bool» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.Bool)
 def «double» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.Double)
 def «char» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.Char)
 def «const char*» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.ConstCharPtr)
+
+def errorField : CodegenM Field := do
+  getCtx >>= (·.newField none (← void) "_error")
+
+def getField! (fields : Array Field) (x : Nat) : CodegenM Field := do
+  fields.map pure |>.getD x errorField
 
 class AsRValue (α : Type) where
   asRValue : α → CodegenM RValue
@@ -133,6 +134,11 @@ def cast [AsRValue τ] (x : τ) (ty : JitType) : CodegenM RValue :=
   getCtx >>= (do ·.newCast none (← asRValue x) ty)
 
 infix:50 " ::: " => cast
+
+def bitcast [AsRValue τ] (x : τ) (ty : JitType) : CodegenM RValue :=
+  getCtx >>= (do ·.newBitCast none (← asRValue x) ty)
+
+infix:50 " ::! " => bitcast
 
 class GccJitCall (α : Type) where
   call : Func → α → CodegenM RValue
@@ -209,7 +215,6 @@ infix:50 " ·>> "  => compare Comparison.GT
 infix:50 " >== " => compare Comparison.GE
 
 
-
 instance [AsRValue τ] : HAdd τ UInt64 (CodegenM RValue) where
   hAdd x y := do
     let x' ← asRValue x
@@ -250,7 +255,7 @@ instance [AsRValue τ] : HOr τ UInt64 (CodegenM RValue) where
     let x' ← asRValue x
     binaryOp BinaryOp.BitwiseOr x (← mkConstant (← x'.getType) y)
   
-def mkIfBranch [AsRValue τ] (blk : Block) (cond: CodegenM τ)
+def mkIfBranch [AsRValue τ] (blk : Block) (cond: τ)
   (then_ : Block → CodegenM Unit)
   (else_ : Block → CodegenM Unit) 
   (then_name : Option String := none)
@@ -259,7 +264,7 @@ def mkIfBranch [AsRValue τ] (blk : Block) (cond: CodegenM τ)
   let func ← blk.getFunction
   let onTrue ← func.newBlock then_name
   let onFalse ← func.newBlock else_name
-  blk.endWithConditional none (← cond >>= asRValue) onTrue onFalse
+  blk.endWithConditional none (← asRValue cond) onTrue onFalse
   then_ onTrue
   else_ onFalse
 
@@ -300,10 +305,10 @@ def importFunction (name: String) (ret: JitType) (params: Array (JitType × Stri
   mkFunction name ret params (fun _ _ => pure ()) FunctionKind.Imported
 
 def errorParam : CodegenM LeanGccJit.Core.Param := 
-  getCtx >>= (do ·.newParam none (← «void*») "_error")
+  getCtx >>= (do ·.newParam none (← «void») "_error")
 
 def getParam! (params : Array LeanGccJit.Core.Param) (x : Nat) : CodegenM LeanGccJit.Core.Param := do
-  pure $ params.getD x (← errorParam)
+  params.map pure |>.getD x errorParam
 
 def mkLocalVar (blk : Block)  (ty : JitType) (name : String) : CodegenM LValue := do
   let func ← blk.getFunction
@@ -317,6 +322,9 @@ def mkAssignment [AsLValue α] [AsRValue τ] (blk : Block) (x : α) (y : τ) : C
 
 def mkAssignmentOp [AsLValue α] [AsRValue τ] (blk : Block) (op : BinaryOp) (x : α) (y : τ) : CodegenM Unit := do
   blk.addAssignmentOp none (← asLValue x) op (← asRValue y)
+
+def mkEval [AsRValue τ] (blk : Block) (x : τ) : CodegenM Unit := do
+  blk.addEval none (← asRValue x)
 
 def mkArrayAccess [AsRValue α] [AsRValue τ] (x : α) (y : τ) : CodegenM LValue := do
   getCtx >>= (·.newArrayAccess none (← asRValue x) (← asRValue y))
@@ -334,4 +342,8 @@ export GccJitUnary (unary)
 prefix:20 " ·-· " => unary UnaryOp.Minus 
 prefix:20 " ·~· " => unary UnaryOp.BitwiseNegate
 prefix:20 " ·!· " => unary UnaryOp.LogicalNegate
+
+def dereferenceField [AsRValue α] (x : α) (structTy : Struct × Array Field) (idx : Nat) : CodegenM LValue := do
+  let x ← asRValue x
+  x.dereferenceField none (← getField! structTy.2 idx)
 
