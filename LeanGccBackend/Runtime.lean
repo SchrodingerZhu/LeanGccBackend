@@ -91,6 +91,9 @@ def getLeanPanicFn : CodegenM Func := do
 def getLeanMarkPersistent : CodegenM Func := do
   importFunction "lean_mark_persistent" (←void) #[((← «lean_object*»), "obj")]
 
+def getLeanMarkMT : CodegenM Func := do
+  importFunction "lean_mark_mt" (←void) #[((← «lean_object*»), "obj")]
+
 def getLeanAllocSmall : CodegenM Func := do
   let unsigned ← unsigned
   importFunction "lean_alloc_small" (← «lean_object*») #[
@@ -305,3 +308,105 @@ def getLeanIncN : CodegenM Func := do
 def getLeanDec : CodegenM Func := 
   ifNotScalar "lean_dec" fun block params => do
     call (← getLeanDecRef) (← getParam! params 0) >>= mkEval block
+
+def Constant.LeanMaxCtorTag  : UInt64 := 244
+def Constant.LeanClosure     : UInt64 := 245
+def Constant.LeanArray       : UInt64 := 246
+def Constant.LeanStructArray : UInt64 := 247
+def Constant.LeanScalarArray : UInt64 := 248
+def Constant.LeanString      : UInt64 := 249
+def Constant.LeanMPZ         : UInt64 := 250
+def Constant.LeanThunk       : UInt64 := 251
+def Constant.LeanTask        : UInt64 := 252
+def Constant.LeanRef         : UInt64 := 253
+def Constant.LeanExternal    : UInt64 := 254
+def Constant.LeanReserved    : UInt64 := 255
+
+private def leanIsMux (name : String) (tag_ : UInt64) : CodegenM Func := do
+  mkFunction ("lean_is_" ++ name) (← bool) #[((← «lean_object*»), "o")] fun blk params => do
+    let obj ← getParam! params 0
+    let tag ← call (← getLeanPtrTag) obj
+    mkReturn blk $ (← tag === tag_)
+
+def getLeanIsClosure : CodegenM Func := leanIsMux "closure" Constant.LeanClosure
+def getLeanIsArray : CodegenM Func := leanIsMux "array" Constant.LeanArray
+def getLeanIsStructArray : CodegenM Func := leanIsMux "struct_array" Constant.LeanStructArray
+def getLeanIsScalarArray : CodegenM Func := leanIsMux "scalar_array" Constant.LeanScalarArray
+def getLeanIsString : CodegenM Func := leanIsMux "string" Constant.LeanString
+def getLeanIsMPZ : CodegenM Func := leanIsMux "mpz" Constant.LeanMPZ
+def getLeanIsThunk : CodegenM Func := leanIsMux "thunk" Constant.LeanThunk
+def getLeanIsTask : CodegenM Func := leanIsMux "task" Constant.LeanTask
+def getLeanIsRef : CodegenM Func := leanIsMux "ref" Constant.LeanRef
+def getLeanIsExternal : CodegenM Func := leanIsMux "external" Constant.LeanExternal
+
+def getLeanIsCtor : CodegenM Func := do
+  mkFunction "lean_is_ctor" (← bool) #[((← «lean_object*»), "o")] fun blk params => do
+    let obj ← getParam! params 0
+    let tag ← call (← getLeanPtrTag) obj
+    mkReturn blk $ (← tag <== Constant.LeanMaxCtorTag)
+
+def getLeanObjTag : CodegenM Func := do
+  let unsigned ← unsigned
+  mkFunction "lean_obj_tag" unsigned #[((← «lean_object*»), "o")] fun blk params => do
+    let obj ← getParam! params 0
+    let isScalar ← call (← getLeanIsScalar) obj
+    mkIfBranch blk isScalar
+      (fun then_ => do
+        let tag ← call (← getLeanUnbox) obj
+        mkReturn then_ (← tag ::: unsigned)
+      )
+      (fun else_ => do
+        let tag ← call (← getLeanPtrTag) obj
+        mkReturn else_ (← tag ::: unsigned)
+      )
+
+def getLeanIsExclusive : CodegenM Func := do
+  mkFunction "lean_is_exclusive" (← bool) #[((← «lean_object*»), "o")] fun blk params => do
+    let obj ← getParam! params 0
+    let isSingleThreaded ← call (← getLeanIsScalar) obj >>= likely
+    mkIfBranch blk isSingleThreaded
+      (fun then_ => do
+        let ty ← getLeanObject
+        let m_rc ← dereferenceField obj ty 0
+        mkReturn then_ $ (← m_rc === (1 : UInt64))
+      )
+      (fun else_ => do
+        mkReturn else_ (← constantZero (← bool))
+      )
+
+def getLeanIsShared : CodegenM Func := do
+  mkFunction "lean_is_shared" (← bool) #[((← «lean_object*»), "o")] fun blk params => do
+    let obj ← getParam! params 0
+    let isSingleThreaded ← call (← getLeanIsScalar) obj >>= likely
+    mkIfBranch blk isSingleThreaded
+      (fun then_ => do
+        let ty ← getLeanObject
+        let m_rc ← dereferenceField obj ty 0
+        mkReturn then_ $ (← m_rc ·>> (1 : UInt64))
+      )
+      (fun else_ => do
+        mkReturn else_ (← constantZero (← bool))
+      )
+
+private def getLeanApply (arity: Nat) := do
+  getOrCreateFunction s!"lean_apply_{arity}" do -- duplicate check is fine
+    let objPtr ← «lean_object*»
+    let args := (List.range arity).map fun i => (objPtr, s!"a{i}")
+    importFunction s!"lean_apply_{arity}" (← «lean_object*») (args.toArray)
+
+def getLeanApply1 : CodegenM Func := getLeanApply 1
+def getLeanApply2 : CodegenM Func := getLeanApply 2
+def getLeanApply3 : CodegenM Func := getLeanApply 3
+def getLeanApply4 : CodegenM Func := getLeanApply 4
+def getLeanApply5 : CodegenM Func := getLeanApply 5
+def getLeanApply6 : CodegenM Func := getLeanApply 6
+def getLeanApply7 : CodegenM Func := getLeanApply 7
+def getLeanApply8 : CodegenM Func := getLeanApply 8
+def getLeanApply9 : CodegenM Func := getLeanApply 9
+def getLeanApply10 : CodegenM Func := getLeanApply 10
+def getLeanApply11 : CodegenM Func := getLeanApply 11
+def getLeanApply12 : CodegenM Func := getLeanApply 12
+def getLeanApply13 : CodegenM Func := getLeanApply 13
+def getLeanApply14 : CodegenM Func := getLeanApply 14
+def getLeanApply15 : CodegenM Func := getLeanApply 15
+def getLeanApply16 : CodegenM Func := getLeanApply 16

@@ -27,6 +27,9 @@ def main : IO Unit := do
     let _ ← GccJit.getLeanInc
     let _ ← GccJit.getLeanIncN
     let _ ← GccJit.getLeanDec
+    let _ ← GccJit.getLeanObjTag
+    let _ ← GccJit.getLeanIsExclusive
+    let _ ← GccJit.getLeanIsShared
   
   let _ ← ops.run state context
   -- let _ ← GccJit.getLeanDecRef.run state context
