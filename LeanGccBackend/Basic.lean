@@ -336,6 +336,11 @@ def mkEval [AsRValue τ] (blk : Block) (x : τ) : CodegenM Unit := do
 def mkArrayAccess [AsRValue α] [AsRValue τ] (x : α) (y : τ) : CodegenM LValue := do
   getCtx >>= (·.newArrayAccess none (← asRValue x) (← asRValue y))
 
+def arrayToPtr [AsRValue α] (x : α) : CodegenM RValue := do
+  let x ← asRValue x
+  let elem ← mkArrayAccess x (← constantZero (← size_t))
+  elem.getAddress none
+
 def mkWhileLoop 
   (blk : Block) 
   (cond : RValue) 

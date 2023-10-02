@@ -14,11 +14,19 @@ def getLeanObject : CodegenM (Struct × Array Field) := do
     (← bitfield unsigned 8 "m_tag")
   ]
 
+
 def «lean_object» : CodegenM JitType := do
   getLeanObject >>= (·.fst.asJitType)
 
 def «lean_object*» : CodegenM JitType :=
   getLeanObject >>= (·.fst.asJitType) >>= (·.getPointer)
+
+def getLeanCtorObject : CodegenM (Struct × Array Field) := do
+  let obj_ptr ← «lean_object*»
+  mkStruct "lean_ctor_object" #[
+    (← field obj_ptr "m_header"),
+    (← arrayField obj_ptr 0 "m_objs")
+  ]
 
 def getLeanArrayObject : CodegenM (Struct × Array Field) := do
   let size_t ← size_t
@@ -415,6 +423,66 @@ def getLeanFinalizeTaskManager : CodegenM Func := do
 
 def getLeanIOResultShowError : CodegenM Func := do
   importFunction "lean_io_result_show_error" (←void) #[((← «lean_object*»), "r")]
+
+def getLeanMkString :  CodegenM Func := do
+  importFunction "lean_mk_string" (← «lean_object*») #[((← «const char*»), "s")]
+
+def getLeanSetSTHeader : CodegenM Func := do
+  let unsigned ← unsigned
+  mkFunction "lean_set_st_header" (← void) 
+    #[((← «lean_object*»), "o"), (unsigned, "tag"), (unsigned, "other")] fun blk params => do
+    let o ← getParam! params 0
+    let object ← getLeanObject
+    let tag ← getParam! params 1
+    let other ← getParam! params 2
+    let m_rc ← dereferenceField o object 0
+    let m_cs_sz ← dereferenceField o object 1
+    let m_other ← dereferenceField o object 2
+    let m_tag ← dereferenceField o object 3
+    mkAssignment blk m_rc (← constantOne (← int))
+    mkAssignment blk m_cs_sz (← constantZero unsigned)
+    mkAssignment blk m_other other
+    mkAssignment blk m_tag tag
+    blk.endWithVoidReturn none
+
+def getLeanAllocCtor : CodegenM Func := do
+  let unsigned ← unsigned
+  let size_t ← size_t
+  mkFunction "lean_alloc_ctor" (← «lean_object*») 
+    #[(unsigned, "tag"), (unsigned, "num_objs"), (unsigned, "scalar_sz")] fun blk params => do
+    let tag ← getParam! params 0
+    -- TODO: use sizeof once supported
+    let leanCtorObjectSize ← Constant.LEAN_OBJECT_SIZE_DELTA
+    let ptrSize ← GccJit.size_t >>= (·.getSize) >>= (mkConstant size_t ·.toUInt64)
+    let numObjs ← getParam! params 1
+    let scalarSz ← getParam! params 2
+    let memory ← mkLocalVar blk (← «lean_object*») "memory"
+    let size ← (← ptrSize * (← numObjs ::: size_t)) + (← (← leanCtorObjectSize ::: size_t) + (← scalarSz ::: size_t))
+    mkAssignment blk memory $ (← call (← getLeanAllocCtorMemory) size)
+    mkEval blk $ (← call (← getLeanSetSTHeader) (memory, tag, (← constantZero unsigned)))
+    mkReturn blk memory
+
+def getLeanCtorObjCPtr : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  let obj_ptr_ptr ← obj_ptr.getPointer
+  mkFunction "lean_ctor_obj_cptr" obj_ptr_ptr #[(obj_ptr, "o")] fun blk params => do
+    let o ← getParam! params 0
+    let ctorObj ← getLeanCtorObject
+    let ctorObjPtr ← ctorObj.fst.asJitType >>= (·.getPointer)
+    let casted ← o ::: ctorObjPtr
+    let m_objs ← dereferenceField casted ctorObj 1
+    mkReturn blk (← arrayToPtr m_objs)
+
+def getLeanCtorSet : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  mkFunction "lean_ctor_set" (← void) #[(obj_ptr, "o"), ((← unsigned), "i"), (obj_ptr, "v")] fun blk params => do
+    let o ← getParam! params 0
+    let i ← getParam! params 1
+    let v ← getParam! params 2
+    let ptr ← call (← getLeanCtorObjCPtr) o
+    let access ← mkArrayAccess ptr i
+    mkAssignment blk access v
+    blk.endWithVoidReturn none
 
 private def getLeanApply (arity: Nat) := do
     let objPtr ← «lean_object*»

@@ -32,6 +32,31 @@ def getLeanMain : CodegenM Func := do
     ((←int8_t), "x"), (obj_ptr, "y")
   ]
 
+def getCStrArrayToLeanList : CodegenM Func := do
+  let cstr ← «const char*»
+  let obj_ptr ← «lean_object*»
+  let unsigned ← unsigned
+  let int ← int
+  mkFunction "lean_gccjit_cstr_array_to_lean_list" obj_ptr #[
+    ((← cstr.getPointer), "cstr_array"), (int, "n")] fun blk params => do
+    let cstrArr ← getParam! params 0
+    let n ← getParam! params 1
+    let list ← mkLocalVar blk obj_ptr "list"
+    mkAssignment blk list (←call (← getLeanBox) (← constantZero (← size_t)))
+    mkWhileLoop blk (← n ·>> (← constantOne int))
+      (fun body => do
+        mkAssignmentOp body BinaryOp.Minus n (← constantOne int)
+        let cstr ← mkArrayAccess cstrArr n
+        let str ← call (← getLeanMkString) cstr
+        let ctor ← mkLocalVar body obj_ptr "ctor"
+        mkAssignment body ctor (←call (← getLeanAllocCtor) 
+          (← constantOne unsigned, ← mkConstant unsigned 2, ← mkConstant unsigned 0))
+        mkEval body $ (←call (← getLeanCtorSet) (ctor, ← constantZero unsigned, str))
+        mkEval body $ (←call (← getLeanCtorSet) (ctor, ← constantOne unsigned, list))
+        mkAssignment body list ctor
+      )
+      (fun after => mkReturn after list)
+
 def emitMainFn : CodegenM Unit := do
   let env ← getEnv
   -- let main ← getDecl `main

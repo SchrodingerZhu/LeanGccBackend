@@ -37,6 +37,9 @@ def main : IO Unit := do
     let _ ← GccJit.getLeanObjTag
     let _ ← GccJit.getLeanIsExclusive
     let _ ← GccJit.getLeanIsShared
+    let _ ← GccJit.getLeanCtorObjCPtr
+    let _ ← GccJit.getLeanCtorSet
+    let _ ← GccJit.getCStrArrayToLeanList
     GccJit.emitMainFn
   
   let _ ← ops.run state context
