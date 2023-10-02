@@ -336,6 +336,19 @@ def mkEval [AsRValue τ] (blk : Block) (x : τ) : CodegenM Unit := do
 def mkArrayAccess [AsRValue α] [AsRValue τ] (x : α) (y : τ) : CodegenM LValue := do
   getCtx >>= (·.newArrayAccess none (← asRValue x) (← asRValue y))
 
+def mkWhileLoop 
+  (blk : Block) 
+  (cond : RValue) 
+  (body : Block → CodegenM Unit) 
+  (after : Block → CodegenM Unit) : CodegenM Unit := do
+  let func ← blk.getFunction
+  let bodyBlock ← func.newBlock none
+  let afterBlock ← func.newBlock none 
+  blk.endWithConditional none cond bodyBlock afterBlock
+  body bodyBlock
+  bodyBlock.endWithConditional none cond bodyBlock afterBlock
+  after afterBlock
+  
 class GccJitUnary (α : Type) where
   unary : UnaryOp → α → CodegenM RValue
 
