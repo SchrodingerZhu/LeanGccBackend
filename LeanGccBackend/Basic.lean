@@ -10,6 +10,8 @@ import Lean.Compiler.IR.NormIds
 import Lean.Compiler.IR.SimpCase
 import Lean.Compiler.IR.Boxing
 import Lean.Compiler.IR.ResetReuse
+import Lean.Compiler.IR.EmitC
+import Lean.Compiler.IR.EmitLLVM
 
 import LeanGccJit.Core
 open LeanGccJit.Core
@@ -19,6 +21,7 @@ namespace GccJit
 def leanMainFn := "_lean_main"
 
 structure GccContext where
+  env        : Environment
   modName    : Name
   jpMap      : JPParamsMap := {}
   mainFn     : FunId := default
@@ -81,6 +84,7 @@ def «void*» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.VoidPtr)
 def «uint8_t» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.UInt8)
 def «uint16_t» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.UInt16)
 def «int» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.Int)
+def «int8_t» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.Int8)
 def «unsigned» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.UnsignedInt)
 def «long» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.Long)
 def «bool» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.Bool)
@@ -142,6 +146,9 @@ infix:50 " ::! " => bitcast
 
 class GccJitCall (α : Type) where
   call : Func → α → CodegenM RValue
+
+instance : GccJitCall Unit where
+  call f _ := getCtx >>= (do ·.newCall none f #[])
 
 instance [AsRValue τ] : GccJitCall τ where
   call f x := getCtx >>= (do ·.newCall none f #[(← asRValue x)])

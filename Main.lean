@@ -1,5 +1,6 @@
 import «LeanGccBackend»
 import «LeanGccBackend».Runtime
+import «LeanGccBackend».Codegen
 import «LeanGccJit»
 
 open Lean.IR
@@ -8,6 +9,12 @@ open LeanGccJit.Core
 def main : IO Unit := do 
   let ctx ← Context.acquire
   let context : GccJit.GccContext := {
+    env := {
+      const2ModIdx := default,
+      constants := default,
+      extensions := default,
+      extraConstNames := default,
+    }
     modName := "test"
     ctx
   }
@@ -30,6 +37,7 @@ def main : IO Unit := do
     let _ ← GccJit.getLeanObjTag
     let _ ← GccJit.getLeanIsExclusive
     let _ ← GccJit.getLeanIsShared
+    GccJit.emitMainFn
   
   let _ ← ops.run state context
   -- let _ ← GccJit.getLeanDecRef.run state context

@@ -14,7 +14,7 @@ def getLeanObject : CodegenM (Struct × Array Field) := do
     (← bitfield unsigned 8 "m_tag")
   ]
 
-def «lean_object» : CodegenM JitType :=
+def «lean_object» : CodegenM JitType := do
   getLeanObject >>= (·.fst.asJitType)
 
 def «lean_object*» : CodegenM JitType :=
@@ -388,8 +388,35 @@ def getLeanIsShared : CodegenM Func := do
         mkReturn else_ (← constantZero (← bool))
       )
 
+def getLeanInitialize : CodegenM Func := do
+  importFunction "lean_initialize" (←void) #[]
+
+def getLeanInitializeRuntimeModule : CodegenM Func := do
+  importFunction "lean_initialize_runtime_module" (←void) #[]
+
+def getLeanIOMkWorld : CodegenM Func := do
+  mkFunction "lean_io_mk_world" (← «lean_object*») #[] fun blk _ => do
+    mkReturn blk $ (←call (← getLeanBox) (← constantZero (← size_t)))
+
+def getLeanIOMarkEndInitialization : CodegenM Func := do
+  importFunction "lean_io_mark_end_initialization" (←void) #[]
+
+def getLeanIOResultIsOk : CodegenM Func := do
+  mkFunction "lean_io_result_is_ok" (← bool) #[((← «lean_object*»), "r")] fun blk params => do
+    let r ← getParam! params 0
+    let tag ← call (← getLeanPtrTag) r
+    mkReturn blk $ (← tag === (0 : UInt64))
+
+def getLeanInitTaskManager : CodegenM Func := do
+  importFunction "lean_init_task_manager" (←void) #[]
+
+def getLeanFinalizeTaskManager : CodegenM Func := do
+  importFunction "lean_finalize_task_manager" (←void) #[]
+
+def getLeanIOResultShowError : CodegenM Func := do
+  importFunction "lean_io_result_show_error" (←void) #[((← «lean_object*»), "r")]
+
 private def getLeanApply (arity: Nat) := do
-  getOrCreateFunction s!"lean_apply_{arity}" do -- duplicate check is fine
     let objPtr ← «lean_object*»
     let args := (List.range arity).map fun i => (objPtr, s!"a{i}")
     importFunction s!"lean_apply_{arity}" (← «lean_object*») (args.toArray)
