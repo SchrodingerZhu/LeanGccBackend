@@ -525,7 +525,8 @@ def getLeanCtorGetAux (name : String) (ty : JitType) : CodegenM Func := do
   mkFunction s!"lean_ctor_get_{name}" ty #[(objPtr, "o"), (← unsigned, "offset")] fun blk params => do
     let o ← getParam! params 0
     let base ← call (← getLeanCtorObjCPtr) o >>= (bitcast · (← uint8_t >>= (·.getPointer)))
-    let withOffset ← (← base + (← getParam! params 1)) ::! (← ty.getPointer)
+    let tyPtr ← ty.getPointer
+    let withOffset ← mkArrayAccess base (← getParam! params 1) >>= (·.getAddress none) >>= (bitcast · tyPtr)
     mkReturn blk (← withOffset.dereference none)
 
 def getLeanUnboxAux (name : String) (ty : JitType) : CodegenM Func := do
