@@ -520,6 +520,10 @@ def getLeanApply14 : CodegenM Func := getLeanApply 14
 def getLeanApply15 : CodegenM Func := getLeanApply 15
 def getLeanApply16 : CodegenM Func := getLeanApply 16
 
+def getLeanApplyM : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  importFunction "lean_apply_m" obj_ptr #[(obj_ptr, "f"), (← unsigned, "n"), (← obj_ptr.getPointer, "args")]
+
 def getLeanCtorGetAux (name : String) (ty : JitType) : CodegenM Func := do
   let objPtr ← «lean_object*»
   mkFunction s!"lean_ctor_get_{name}" ty #[(objPtr, "o"), (← unsigned, "offset")] fun blk params => do
@@ -541,3 +545,4 @@ def getLeanUnboxAux (name : String) (ty : JitType) : CodegenM Func := do
     mkReturn blk (← call func (o, (← constantZero (← unsigned))))
 
 def getLeanUnboxUInt32 : CodegenM Func := uint32_t >>= getLeanUnboxAux "uint32"
+

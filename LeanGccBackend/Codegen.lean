@@ -57,6 +57,103 @@ def getCStrArrayToLeanList : CodegenM Func := do
       )
       (fun after => mkReturn after list)
 
+structure FunctionView where
+  func : Func
+  params: Array LeanGccJit.Core.Param
+  cursor : Block
+  tmpCount : Nat
+
+abbrev FuncM := StateT FunctionView CodegenM 
+
+def getParamM! (n : Nat) : FuncM LeanGccJit.Core.Param := do
+  get >>= (getParam! ·.params n)
+
+def withFunctionView 
+  (func: Func) (entry: Block) (params: Array LeanGccJit.Core.Param) (body: FuncM α) : CodegenM α := do 
+  body.run' ⟨func, params, entry, 0⟩
+
+def moveTo (blk: Block) : FuncM Unit := do
+  modify fun view => { view with cursor := blk }
+
+def currentBlock : FuncM Block := do
+  get >>= (pure ·.cursor)
+
+def getFunction : FuncM Func := 
+  get >>= (pure ·.func)
+
+def getNewLocalName : FuncM String := do
+  let tmpCount ← get >>= (pure ·.tmpCount)
+  modify fun view => { view with tmpCount := tmpCount + 1 }
+  pure s!"__tmp{tmpCount}"
+
+def mkLocalVarM (ty: JitType) (name : Option String := none) : FuncM LValue := do
+  match name with
+  | none => do 
+    let name ← getNewLocalName
+    getFunction >>= (·.newLocal none ty name)
+  | some name => do
+    getFunction >>= (·.newLocal none ty name)
+
+def mkAssignmentM [AsLValue α] [AsRValue τ] (x : α) (y : τ) : FuncM Unit := do
+  mkAssignment (←currentBlock) x y
+
+def mkAssignmentOpM [AsLValue α] [AsRValue τ]  (op : BinaryOp) (x : α) (y : τ) : FuncM Unit := do
+  mkAssignmentOp (←currentBlock) op (← asLValue x) (← asRValue y)
+
+def mkEvalM [AsRValue τ] (x : τ) : FuncM Unit := do
+  mkEval (←currentBlock) x
+
+def getTempArrayObjArray (objs : Array RValue) : FuncM LValue := do
+  let obj_ptr ← «lean_object*»
+  let ctx ← getCtx
+  let arrTy ← ctx.newArrayType none obj_ptr objs.size
+  let arr ← mkLocalVarM arrTy
+  let constructor ← ctx.newArrayConstructor none arrTy objs
+  mkAssignmentM arr constructor
+  return arr
+
+def mkFunctionM
+  (name : String) 
+  (retTy : JitType) 
+  (params : Array (JitType × String)) 
+  (body: FuncM Unit)
+  (kind : FunctionKind := FunctionKind.AlwaysInline)
+  : CodegenM Func := getOrCreateFunction name do
+    let ctx ← getCtx
+    let params' ← params.mapM fun (ty, name) => do ctx.newParam none ty name
+    let func ← ctx.newFunction none kind retTy name params' false
+    match kind with
+    | FunctionKind.Imported => 
+      return func
+    | _ => do
+      let block ← func.newBlock "entry"
+      withFunctionView func block params' body
+      pure func
+
+def mkNewBlock (name : Option String := none) : FuncM Block := do
+  getFunction >>= (·.newBlock name)
+
+def mkIfBranchM [AsRValue τ] (cond: τ)
+  (then_ : FuncM Unit)
+  (else_ : FuncM Unit) 
+  (thenName : Option String := none)
+  (elseName : Option String := none)
+: FuncM Unit := do
+  let onTrue ← mkNewBlock thenName
+  let onFalse ← mkNewBlock elseName
+  let blk ← currentBlock
+  blk.endWithConditional none (← asRValue cond) onTrue onFalse
+  moveTo onTrue
+  then_
+  moveTo onFalse
+  else_
+
+def goto (x : Block) : FuncM Unit :=
+  currentBlock >>= (·.endWithJump none x)
+
+def mkReturnM [AsRValue τ] (x : τ) : FuncM Unit := do
+  mkReturn (←currentBlock) x
+
 def emitMainFn : CodegenM Unit := do
   let env ← getEnv
   -- let main ← getDecl `main
@@ -66,60 +163,57 @@ def emitMainFn : CodegenM Unit := do
   let int ← int
   let bool ← bool
   let argv ← «const char*» >>= (·.getPointer)
-  let body := fun blk params => do
+  let _ ← mkFunctionM "main" int #[(int, "argc"), (argv, "argv")] (kind := FunctionKind.Exported) do
     if System.Platform.getIsWindows () then do
-      mkEval blk $ (←call (←getSetErrorMode) (←Constant.SEM_FAILCRITICALERRORS))
+      mkEvalM (←call (←getSetErrorMode) (←Constant.SEM_FAILCRITICALERRORS))
     let usesLeanAPI := usesModuleFrom env `Lean
     if usesLeanAPI then do
-      mkEval blk $ (←call (← getLeanInitialize) ())
+      mkEvalM (←call (← getLeanInitialize) ())
     else do
-      mkEval blk $ (←call (← getLeanInitializeRuntimeModule) ())
-    mkEval blk $ (←call (← getLeanSetPanicMessages) (← constantZero bool))
-    let res ← mkLocalVar blk (←«lean_object*») "res"
+      mkEvalM (←call (← getLeanInitializeRuntimeModule) ())
+    mkEvalM (←call (← getLeanSetPanicMessages) (← constantZero bool))
+    let res ← mkLocalVarM (←«lean_object*») "res"
     let realWorld ← call (← getLeanIOMkWorld) ()
-    mkAssignment blk res (←call (← getModuleInitializationFunction) ((← constantOne (← int8_t)), realWorld))
-    mkEval blk $ (←call (← getLeanSetPanicMessages) (← constantOne bool))
-    mkEval blk $ (←call (← getLeanIOMarkEndInitialization) ())
+    mkAssignmentM res (←call (← getModuleInitializationFunction) ((← constantOne (← int8_t)), realWorld))
+    mkEvalM (←call (← getLeanSetPanicMessages) (← constantOne bool))
+    mkEvalM (←call (← getLeanIOMarkEndInitialization) ())
     let leanMain ← getLeanMain
-    let func ← blk.getFunction
-    let epilogue ← func.newBlock "epilogue"
-    mkIfBranch blk (← call (← getLeanIOResultIsOk) res)
-      (fun then_ => do 
-        mkEval then_ $ (←call (← getLeanDecRef) res)
-        mkEval then_ $ (←call (← getLeanInitTaskManager) ())
+    let epilogue ← mkNewBlock "epilogue"
+    mkIfBranchM (← call (← getLeanIOResultIsOk) res)
+      (do 
+        mkEvalM (←call (← getLeanDecRef) res)
+        mkEvalM (←call (← getLeanInitTaskManager) ())
         if (←leanMain.getParamCount) == 2
         then
-          let argc ← getParam! params 0
-          let argv ← getParam! params 1
+          let argc ← getParamM! 0
+          let argv ← getParamM! 1
           let argList ← call (← getCStrArrayToLeanList) (argc, argv)
-          mkAssignment then_ res $ (←call (← getLeanMain) (argList, realWorld))
+          mkAssignmentM res (←call (← getLeanMain) (argList, realWorld))
         else
-          mkAssignment then_ res $ (←call (← getLeanMain) (realWorld))
-        then_.endWithJump none epilogue
+          mkAssignmentM res (←call (← getLeanMain) (realWorld))
+        goto epilogue
       )
-      (fun else_ => do 
-        else_.endWithJump none epilogue 
-      )
+      (goto epilogue)
     let retTy := 
       env.find? `main |>.map (·.type |>.getForallBody |>.appArg!) |>.getD default
-    mkEval epilogue $ (←call (← getLeanFinalizeTaskManager) ())
-    mkIfBranch epilogue (← call (← getLeanIOResultIsOk) res)
-      (fun then_ => do 
-        let ret ← mkLocalVar then_ int "ret"
+    moveTo epilogue
+    mkEvalM (←call (← getLeanFinalizeTaskManager) ())
+    mkIfBranchM (← call (← getLeanIOResultIsOk) res)
+      (do 
+        let ret ← mkLocalVarM int "ret"
         if retTy.constName? == some ``UInt32 then do
           let inner ← call (← getLeanIOResultGetValue) res
           let unboxed ← (← call (← getLeanUnboxUInt32) inner) ::! (← int32_t)
           let extended ← unboxed ::: int
-          mkAssignment then_ ret extended
+          mkAssignmentM ret extended
         else do
-          mkAssignment then_ ret (← constantZero int)
-        mkEval then_ $ (←call (← getLeanDecRef) res)
-        mkReturn then_ ret
+          mkAssignmentM ret (← constantZero int)
+        mkEvalM (←call (← getLeanDecRef) res)
+        mkReturnM ret
       )
-      (fun else_ => do 
-        mkEval else_ $ (←call (← getLeanIOResultShowError) res)
-        mkEval else_ $ (←call (← getLeanDecRef) res)
-        mkReturn else_ (← constantOne int)
+      (do 
+        mkEvalM (←call (← getLeanIOResultShowError) res)
+        mkEvalM (←call (← getLeanDecRef) res)
+        mkReturnM (← constantOne int)
       )
-  let _ ← mkFunction "main" int #[(int, "argc"), (argv, "argv")] body FunctionKind.Exported
   return
