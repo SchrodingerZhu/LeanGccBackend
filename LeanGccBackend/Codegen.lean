@@ -37,8 +37,8 @@ def getCStrArrayToLeanList : CodegenM Func := do
   let obj_ptr ← «lean_object*»
   let unsigned ← unsigned
   let int ← int
-  mkFunction "lean_gccjit_cstr_array_to_lean_list" obj_ptr #[
-    ((← cstr.getPointer), "cstr_array"), (int, "n")] fun blk params => do
+  mkFunction "lean_gccjit_cstr_array_to_lean_list" obj_ptr (kind := FunctionKind.Internal) 
+    #[((← cstr.getPointer), "cstr_array"), (int, "n")] fun blk params => do
     let cstrArr ← getParam! params 0
     let n ← getParam! params 1
     let list ← mkLocalVar blk obj_ptr "list"
@@ -66,7 +66,7 @@ def emitMainFn : CodegenM Unit := do
   let int ← int
   let bool ← bool
   let argv ← «const char*» >>= (·.getPointer)
-  let body := fun blk _params => do
+  let body := fun blk params => do
     if System.Platform.getIsWindows () then do
       mkEval blk $ (←call (←getSetErrorMode) (←Constant.SEM_FAILCRITICALERRORS))
     let usesLeanAPI := usesModuleFrom env `Lean
@@ -86,7 +86,11 @@ def emitMainFn : CodegenM Unit := do
       (fun then_ => do 
         mkEval then_ $ (←call (← getLeanDecRef) res)
         mkEval then_ $ (←call (← getLeanInitTaskManager) ())
+        let argc ← getParam! params 0
+        let argv ← getParam! params 1
         then_.addComment none "TODO: call lean main"
+        let argList ←call (← getCStrArrayToLeanList) (argv, argc)
+        mkAssignment then_ res $ (←call (← getLeanMain) (← constantOne (← int8_t) , argList))
         then_.endWithJump none epilogue
       )
       (fun else_ => do 
