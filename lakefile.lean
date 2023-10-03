@@ -1,7 +1,7 @@
 import Lake
 open Lake DSL
 
-require «lean-gccjit» from git "https://github.com/schrodingerzhu/lean-gccjit" @ "0.1.1"
+require «lean-gccjit» from git "https://github.com/schrodingerzhu/lean-gccjit" @ "f02b380bbfdd5d9a089267a33d03665a5f762b0d"
 
 package «LeanGccBackend» where
   -- add package configuration options here

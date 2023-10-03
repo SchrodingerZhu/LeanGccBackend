@@ -29,7 +29,7 @@ def getModuleInitializationFunction : CodegenM Func := do
 def getLeanMain : CodegenM Func := do
   let obj_ptr ← «lean_object*»
   importFunction "__TODO__LEAN_MAIN" obj_ptr #[
-    ((←int8_t), "x"), (obj_ptr, "y")
+    (obj_ptr, "arg_list"), (obj_ptr, "real_world")
   ]
 
 def getCStrArrayToLeanList : CodegenM Func := do
@@ -37,10 +37,10 @@ def getCStrArrayToLeanList : CodegenM Func := do
   let obj_ptr ← «lean_object*»
   let unsigned ← unsigned
   let int ← int
-  mkFunction "lean_gccjit_cstr_array_to_lean_list" obj_ptr (kind := FunctionKind.Internal) 
-    #[((← cstr.getPointer), "cstr_array"), (int, "n")] fun blk params => do
-    let cstrArr ← getParam! params 0
-    let n ← getParam! params 1
+  mkFunction "__lean_internal_cstr_array_to_lean_list" obj_ptr (kind := FunctionKind.Internal) 
+    #[(int, "argc"), (← cstr.getPointer, "argv")] fun blk params => do
+    let n ← getParam! params 0
+    let cstrArr ← getParam! params 1 
     let list ← mkLocalVar blk obj_ptr "list"
     mkAssignment blk list (←call (← getLeanBox) (← constantZero (← size_t)))
     mkWhileLoop blk (← n ·>> (← constantOne int))
@@ -80,28 +80,39 @@ def emitMainFn : CodegenM Unit := do
     mkAssignment blk res (←call (← getModuleInitializationFunction) ((← constantOne (← int8_t)), realWorld))
     mkEval blk $ (←call (← getLeanSetPanicMessages) (← constantOne bool))
     mkEval blk $ (←call (← getLeanIOMarkEndInitialization) ())
+    let leanMain ← getLeanMain
     let func ← blk.getFunction
     let epilogue ← func.newBlock "epilogue"
     mkIfBranch blk (← call (← getLeanIOResultIsOk) res)
       (fun then_ => do 
         mkEval then_ $ (←call (← getLeanDecRef) res)
         mkEval then_ $ (←call (← getLeanInitTaskManager) ())
-        let argc ← getParam! params 0
-        let argv ← getParam! params 1
-        then_.addComment none "TODO: call lean main"
-        let argList ←call (← getCStrArrayToLeanList) (argv, argc)
-        mkAssignment then_ res $ (←call (← getLeanMain) (← constantOne (← int8_t) , argList))
+        if (←leanMain.getParamCount) == 2
+        then
+          let argc ← getParam! params 0
+          let argv ← getParam! params 1
+          let argList ← call (← getCStrArrayToLeanList) (argc, argv)
+          mkAssignment then_ res $ (←call (← getLeanMain) (argList, realWorld))
+        else
+          mkAssignment then_ res $ (←call (← getLeanMain) (realWorld))
         then_.endWithJump none epilogue
       )
       (fun else_ => do 
         else_.endWithJump none epilogue 
       )
+    let retTy := 
+      env.find? `main |>.map (·.type |>.getForallBody |>.appArg!) |>.getD default
     mkEval epilogue $ (←call (← getLeanFinalizeTaskManager) ())
     mkIfBranch epilogue (← call (← getLeanIOResultIsOk) res)
       (fun then_ => do 
         let ret ← mkLocalVar then_ int "ret"
-        then_.addComment none "TODO: check assignment"
-        mkAssignment then_ ret (← constantZero int)
+        if retTy.constName? == some ``UInt32 then do
+          let inner ← call (← getLeanIOResultGetValue) res
+          let unboxed ← (← call (← getLeanUnboxUInt32) inner) ::! (← int32_t)
+          let extended ← unboxed ::: int
+          mkAssignment then_ ret extended
+        else do
+          mkAssignment then_ ret (← constantZero int)
         mkEval then_ $ (←call (← getLeanDecRef) res)
         mkReturn then_ ret
       )

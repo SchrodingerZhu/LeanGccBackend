@@ -484,10 +484,24 @@ def getLeanCtorSet : CodegenM Func := do
     mkAssignment blk access v
     blk.endWithVoidReturn none
 
+def getLeanCtorGet : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  mkFunction "lean_ctor_get" obj_ptr #[(obj_ptr, "o"), ((← unsigned), "i")] fun blk params => do
+    let o ← getParam! params 0
+    let i ← getParam! params 1
+    let ptr ← call (← getLeanCtorObjCPtr) o
+    let access ← mkArrayAccess ptr i
+    mkReturn blk access
+
 private def getLeanApply (arity: Nat) := do
     let objPtr ← «lean_object*»
     let args := (List.range arity).map fun i => (objPtr, s!"a{i}")
     importFunction s!"lean_apply_{arity}" (← «lean_object*») (args.toArray)
+
+def getLeanIOResultGetValue : CodegenM Func := do
+  --  lean_ctor_get(r, 0)
+  mkFunction "lean_io_result_get_value" (← «lean_object*») #[((← «lean_object*»), "r")] fun blk params => do
+    mkReturn blk (← call (← getLeanCtorGet) (← getParam! params 0, ← constantZero (← unsigned)))
 
 def getLeanApply1 : CodegenM Func := getLeanApply 1
 def getLeanApply2 : CodegenM Func := getLeanApply 2
@@ -505,3 +519,24 @@ def getLeanApply13 : CodegenM Func := getLeanApply 13
 def getLeanApply14 : CodegenM Func := getLeanApply 14
 def getLeanApply15 : CodegenM Func := getLeanApply 15
 def getLeanApply16 : CodegenM Func := getLeanApply 16
+
+def getLeanCtorGetAux (name : String) (ty : JitType) : CodegenM Func := do
+  let objPtr ← «lean_object*»
+  mkFunction s!"lean_ctor_get_{name}" ty #[(objPtr, "o"), (← unsigned, "offset")] fun blk params => do
+    let o ← getParam! params 0
+    let base ← call (← getLeanCtorObjCPtr) o >>= (bitcast · (← uint8_t >>= (·.getPointer)))
+    let withOffset ← (← base + (← getParam! params 1)) ::! (← ty.getPointer)
+    mkReturn blk (← withOffset.dereference none)
+
+def getLeanUnboxAux (name : String) (ty : JitType) : CodegenM Func := do
+  mkFunction s!"lean_unbox_{name}" ty #[(← «lean_object*», "o")] fun blk params => do
+  let o ← getParam! params 0
+  if (←ty.getSize) < (← size_t >>= (·.getSize))
+  then do
+    let unboxed ← call (← getLeanUnbox) o
+    mkReturn blk (← unboxed ::: ty)
+  else do
+    let func ← getLeanCtorGetAux name ty
+    mkReturn blk (← call func (o, (← constantZero (← unsigned))))
+
+def getLeanUnboxUInt32 : CodegenM Func := uint32_t >>= getLeanUnboxAux "uint32"
