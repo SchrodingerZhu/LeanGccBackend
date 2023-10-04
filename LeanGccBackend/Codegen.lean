@@ -179,10 +179,10 @@ def getModuleInitializationFunction : CodegenM Func := do
             (do 
               mkEvalM (←call (← getLeanDecRef) res)
             )
+        currentBlock >>= (·.addComment none "TODO: generate decl init code")
         goto epilogue 
       )
     moveTo epilogue
-    epilogue.addComment none "TODO: generate decl init code"
     let unit ← call (← getLeanBox) (← constantZero (← size_t))
     let ok ← call (← getLeanIOResultMkOk) unit
     mkReturnM ok
