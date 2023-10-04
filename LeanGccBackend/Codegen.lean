@@ -187,6 +187,14 @@ def getModuleInitializationFunction : CodegenM Func := do
     let ok ← call (← getLeanIOResultMkOk) unit
     mkReturnM ok
 
+def emitApp [AsRValue φ] (f : φ) (args : Array RValue) : FuncM LValue := do
+  let res ← mkLocalVarM (←«lean_object*»)
+  if args.size <= closureMaxArgs then do
+    mkAssignmentM res (←callArray (← getLeanApply args.size) (#[←  asRValue f] ++ args))
+  else do
+    let args ← getTempArrayObjArray args
+    mkAssignmentM res (←call (← getLeanApplyM) (f, args))
+  return res
 
 def emitMainFn : CodegenM Unit := do
   let env ← getEnv
@@ -197,7 +205,7 @@ def emitMainFn : CodegenM Unit := do
   let int ← int
   let bool ← bool
   let argv ← «const char*» >>= (·.getPointer)
-  let _ ← mkFunctionM "main" int #[(int, "argc"), (argv, "argv")] (kind := FunctionKind.Exported) do
+  discard $ mkFunctionM "main" int #[(int, "argc"), (argv, "argv")] (kind := FunctionKind.Exported) do
     if System.Platform.getIsWindows () then do
       mkEvalM (←call (←getSetErrorMode) (←Constant.SEM_FAILCRITICALERRORS))
     let usesLeanAPI := usesModuleFrom env `Lean

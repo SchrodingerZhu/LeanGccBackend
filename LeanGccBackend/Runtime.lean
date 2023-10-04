@@ -493,7 +493,7 @@ def getLeanCtorGet : CodegenM Func := do
     let access ← mkArrayAccess ptr i
     mkReturn blk access
 
-private def getLeanApply (arity: Nat) := do
+def getLeanApply (arity: Nat) := do
     let objPtr ← «lean_object*»
     let args := (List.range arity).map fun i => (objPtr, s!"a{i}")
     importFunction s!"lean_apply_{arity}" (← «lean_object*») (args.toArray)

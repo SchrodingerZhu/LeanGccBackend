@@ -159,6 +159,9 @@ def bitcast [AsRValue τ] (x : τ) (ty : JitType) : CodegenM RValue :=
 
 infix:50 " ::! " => bitcast
 
+def callArray (f: Func) (args: Array RValue) : CodegenM RValue := do
+  getCtx >>= (do ·.newCall none f args)
+
 class GccJitCall (α : Type) where
   call : Func → α → CodegenM RValue
 
