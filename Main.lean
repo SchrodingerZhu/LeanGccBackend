@@ -40,6 +40,7 @@ def main : IO Unit := do
     let _ ← GccJit.getLeanCtorObjCPtr
     let _ ← GccJit.getLeanCtorSet
     let _ ← GccJit.getCStrArrayToLeanList
+    let _ ← GccJit.getModuleInitializationFunction
     GccJit.emitMainFn
   
   let _ ← ops.run state context

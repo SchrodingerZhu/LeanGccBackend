@@ -7,6 +7,7 @@ namespace Lean.IR
 namespace GccJit
 
 def getEnv : CodegenM Environment := read >>= (pure ·.env)
+def getModName : CodegenM Name := GccContext.modName <$> read
 
 def getDecl (n : Name) : CodegenM Decl := do
   let env ← getEnv
@@ -19,12 +20,6 @@ def Constant.SEM_FAILCRITICALERRORS : CodegenM RValue := do
 
 def getSetErrorMode : CodegenM Func := do
   importFunction "SetErrorMode" (←unsigned) #[((←unsigned), "uMode")]
-
-def getModuleInitializationFunction : CodegenM Func := do
-  let obj_ptr ← «lean_object*»
-  importFunction "__TODO__MODULE_INITIALIZATION_FUNCTION" obj_ptr #[
-    ((←int8_t), "x"), (obj_ptr, "y")
-  ]
 
 def getLeanMain : CodegenM Func := do
   let obj_ptr ← «lean_object*»
@@ -154,6 +149,45 @@ def goto (x : Block) : FuncM Unit :=
 def mkReturnM [AsRValue τ] (x : τ) : FuncM Unit := do
   mkReturn (←currentBlock) x
 
+def getModuleInitializationFunction : CodegenM Func := do
+  let bool ← bool
+  let uint8_t ← uint8_t
+  let obj_ptr ← «lean_object*»
+  let env ← getEnv
+  let modName ← getModName
+  let mut importedInits := #[]
+  for i in env.imports do
+    let f ← importFunction (mkModuleInitializationFunctionName i.module) obj_ptr #[(uint8_t, "builtin"), (obj_ptr, "w")]
+    importedInits := importedInits.push f
+  let _G_initialized ← getOrCreateGlobal "_G_initialized" bool (init := ←constantZero bool)
+  mkFunctionM (mkModuleInitializationFunctionName modName) obj_ptr #[(uint8_t, "builtin"), (obj_ptr, "w")] (kind := FunctionKind.Exported) do
+    let res ← mkLocalVarM obj_ptr "res"
+    let epilogue ← mkNewBlock "epilogue"
+    mkIfBranchM _G_initialized 
+      (do
+        goto epilogue
+      )
+      (do 
+        mkAssignmentM _G_initialized (← constantOne bool)
+        for i in importedInits do
+          mkAssignmentM res (←call i (← getParamM! 0, ← getParamM! 1))
+          let isErr ← call (← getLeanIOResultIsError) res
+          mkIfBranchM isErr
+            (do 
+              mkReturnM res
+            )
+            (do 
+              mkEvalM (←call (← getLeanDecRef) res)
+            )
+        goto epilogue 
+      )
+    moveTo epilogue
+    epilogue.addComment none "TODO: generate decl init code"
+    let unit ← call (← getLeanBox) (← constantZero (← size_t))
+    let ok ← call (← getLeanIOResultMkOk) unit
+    mkReturnM ok
+
+
 def emitMainFn : CodegenM Unit := do
   let env ← getEnv
   -- let main ← getDecl `main
@@ -174,7 +208,7 @@ def emitMainFn : CodegenM Unit := do
     mkEvalM (←call (← getLeanSetPanicMessages) (← constantZero bool))
     let res ← mkLocalVarM (←«lean_object*») "res"
     let realWorld ← call (← getLeanIOMkWorld) ()
-    mkAssignmentM res (←call (← getModuleInitializationFunction) ((← constantOne (← int8_t)), realWorld))
+    mkAssignmentM res (←call (← getModuleInitializationFunction) ((← constantOne (← uint8_t)), realWorld))
     mkEvalM (←call (← getLeanSetPanicMessages) (← constantOne bool))
     mkEvalM (←call (← getLeanIOMarkEndInitialization) ())
     let leanMain ← getLeanMain

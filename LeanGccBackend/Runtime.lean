@@ -503,23 +503,6 @@ def getLeanIOResultGetValue : CodegenM Func := do
   mkFunction "lean_io_result_get_value" (← «lean_object*») #[((← «lean_object*»), "r")] fun blk params => do
     mkReturn blk (← call (← getLeanCtorGet) (← getParam! params 0, ← constantZero (← unsigned)))
 
-def getLeanApply1 : CodegenM Func := getLeanApply 1
-def getLeanApply2 : CodegenM Func := getLeanApply 2
-def getLeanApply3 : CodegenM Func := getLeanApply 3
-def getLeanApply4 : CodegenM Func := getLeanApply 4
-def getLeanApply5 : CodegenM Func := getLeanApply 5
-def getLeanApply6 : CodegenM Func := getLeanApply 6
-def getLeanApply7 : CodegenM Func := getLeanApply 7
-def getLeanApply8 : CodegenM Func := getLeanApply 8
-def getLeanApply9 : CodegenM Func := getLeanApply 9
-def getLeanApply10 : CodegenM Func := getLeanApply 10
-def getLeanApply11 : CodegenM Func := getLeanApply 11
-def getLeanApply12 : CodegenM Func := getLeanApply 12
-def getLeanApply13 : CodegenM Func := getLeanApply 13
-def getLeanApply14 : CodegenM Func := getLeanApply 14
-def getLeanApply15 : CodegenM Func := getLeanApply 15
-def getLeanApply16 : CodegenM Func := getLeanApply 16
-
 def getLeanApplyM : CodegenM Func := do
   let obj_ptr ← «lean_object*»
   importFunction "lean_apply_m" obj_ptr #[(obj_ptr, "f"), (← unsigned, "n"), (← obj_ptr.getPointer, "args")]
@@ -546,3 +529,22 @@ def getLeanUnboxAux (name : String) (ty : JitType) : CodegenM Func := do
 
 def getLeanUnboxUInt32 : CodegenM Func := uint32_t >>= getLeanUnboxAux "uint32"
 
+def getLeanIOResultMkOk : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  mkFunction "lean_io_result_mk_ok" obj_ptr #[(obj_ptr, "a")] fun blk params => do
+    let a ← getParam! params 0
+    let r ← mkLocalVar blk obj_ptr "r"
+    let zero ← constantZero (← unsigned)
+    let two ← mkConstant (← unsigned) 2
+    let one ← constantOne (← unsigned)
+    let unit ← call (← getLeanBox) (← constantZero (← size_t))
+    mkAssignment blk r $ (← call (← getLeanAllocCtor) (zero, two, zero))
+    mkEval blk $ (← call (← getLeanCtorSet) (r, zero, a))
+    mkEval blk $ (← call (← getLeanCtorSet) (r, one, unit))
+    mkReturn blk r
+
+def getLeanIOResultIsError : CodegenM Func := do
+  mkFunction "lean_io_result_is_error" (← bool) #[((← «lean_object*»), "r")] fun blk params => do
+    let r ← getParam! params 0
+    let tag ← call (← getLeanPtrTag) r
+    mkReturn blk $ (← tag === (1 : UInt64))

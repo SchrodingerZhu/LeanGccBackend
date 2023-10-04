@@ -4,10 +4,10 @@
  [{"git":
    {"url": "https://github.com/schrodingerzhu/lean-gccjit",
     "subDir?": null,
-    "rev": "f02b380bbfdd5d9a089267a33d03665a5f762b0d",
+    "rev": "a35ccb2ad8ede0425967e6f905b867d80b6ca729",
     "opts": {},
     "name": "«lean-gccjit»",
-    "inputRev?": "f02b380bbfdd5d9a089267a33d03665a5f762b0d",
+    "inputRev?": "a35ccb2ad8ede0425967e6f905b867d80b6ca729",
     "inherited": false}},
   {"git":
    {"url": "https://github.com/leanprover/doc-gen4",

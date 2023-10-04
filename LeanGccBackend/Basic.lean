@@ -69,6 +69,18 @@ def getOrCreateStruct (name : String)
     modify fun s => { s with structMap := s.structMap.insert name st }
     pure st
 
+def getOrCreateGlobal (name : String) (ty : JitType) (kind: GlobalKind := GlobalKind.Internal) (init : Option RValue := none) : CodegenM LValue := do
+  match (← get).globalMap.find? name with
+  | some v => pure v
+  | none  => do
+    let ctx ← getCtx
+    let v ← ctx.newGlobal none kind ty name
+    if let some x := init then
+      let _ ← Global.setInitializerRValue v x
+      pure ()
+    modify fun s => { s with globalMap := s.globalMap.insert name v }
+    pure v
+
 def getBuiltinFunc (name : String) : CodegenM Func :=
   getCtx >>= (·.getBuiltinFunction name)
 
