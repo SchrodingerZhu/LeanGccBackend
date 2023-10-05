@@ -548,3 +548,31 @@ def getLeanIOResultIsError : CodegenM Func := do
     let r ← getParam! params 0
     let tag ← call (← getLeanPtrTag) r
     mkReturn blk $ (← tag === (1 : UInt64))
+
+def getLeanCtorSetAux (name : String) (ty : JitType) : CodegenM Func := do
+  let objPtr ← «lean_object*»
+  mkFunction s!"lean_ctor_get_{name}" (← void) #[(objPtr, "o"), (← unsigned, "offset"), (ty, "value")] fun blk params => do
+    let o ← getParam! params 0
+    let base ← call (← getLeanCtorObjCPtr) o >>= (bitcast · (← uint8_t >>= (·.getPointer)))
+    let tyPtr ← ty.getPointer
+    let withOffset ← mkArrayAccess base (← getParam! params 1) >>= (·.getAddress none) >>= (bitcast · tyPtr)
+    mkAssignment blk (← withOffset.dereference none) (← getParam! params 2)
+    blk.endWithVoidReturn none
+
+def getLeanBoxAux (name : String) (ty : JitType) : CodegenM Func := do
+  let size_t ← size_t
+  mkFunction s!"lean_unbox_{name}" (← «lean_object*») #[(ty, "val")] fun blk params => do
+  let val ← getParam! params 0
+  let tySize ← ty.getSize
+  if tySize < (← size_t.getSize)
+  then do
+    let val ← val ::: size_t
+    mkReturn blk (← call (← getLeanBox) val)
+  else do
+    let unsigned ← unsigned
+    let obj ← mkLocalVar blk (← «lean_object*») "obj"
+    let size ← mkConstant unsigned tySize.toUInt64
+    mkAssignment blk obj $ (← call (← getLeanAllocCtor) (← constantZero unsigned, ← constantZero unsigned, size))
+    let func ← getLeanCtorSetAux name ty
+    mkEval blk (← call func (obj, ←constantZero unsigned, val))
+    mkReturn blk obj

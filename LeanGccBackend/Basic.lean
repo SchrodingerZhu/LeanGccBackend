@@ -331,11 +331,10 @@ def mkFunction
 def importFunction (name: String) (ret: JitType) (params: Array (JitType × String)) : CodegenM Func :=
   mkFunction name ret params (fun _ _ => pure ()) FunctionKind.Imported
 
-def errorParam : CodegenM LeanGccJit.Core.Param := 
-  getCtx >>= (do ·.newParam none (← «void») "_error")
-
 def getParam! (params : Array LeanGccJit.Core.Param) (x : Nat) : CodegenM LeanGccJit.Core.Param := do
-  params.map pure |>.getD x errorParam
+  match params.get? x with
+  | some p => pure p
+  | none   => throw "getParam!: index out of bounds"
 
 def mkLocalVar (blk : Block)  (ty : JitType) (name : String) : CodegenM LValue := do
   let func ← blk.getFunction

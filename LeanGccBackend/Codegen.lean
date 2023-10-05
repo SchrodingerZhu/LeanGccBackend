@@ -2,6 +2,7 @@ import LeanGccBackend.Basic
 import LeanGccBackend.Runtime
 import Lean.Compiler.IR.Boxing
 import LeanGccJit.Core
+import Lean.Compiler.IR.EmitC
 open LeanGccJit.Core
 
 namespace Lean.IR
@@ -55,11 +56,12 @@ def getCStrArrayToLeanList : CodegenM Func := do
       (fun after => mkReturn after list)
 
 structure FunctionView where
-  func     : Func
-  params   : HashMap String LeanGccJit.Core.Param
-  cursor   : Block
-  tmpCount : Nat
-  entry    : Block
+  func      : Func
+  params    : HashMap String LeanGccJit.Core.Param
+  cursor    : Block
+  tmpCount  : Nat
+  localVars : HashMap VarId LValue
+  entry     : Block
   
 abbrev FuncM := StateT FunctionView CodegenM 
 
@@ -73,7 +75,7 @@ def withFunctionView
   let mut params' := HashMap.empty
   for (p, name) in params do
     params' := params'.insert name p
-  body.run' ⟨func, params', entry, 0, entry⟩
+  body.run' ⟨func, params', entry, 0, default, entry⟩
 
 def moveTo (blk: Block) : FuncM Unit := do
   modify fun view => { view with cursor := blk }
@@ -87,7 +89,13 @@ def getFunction : FuncM Func :=
 def getNewLocalName : FuncM String := do
   let tmpCount ← get >>= (pure ·.tmpCount)
   modify fun view => { view with tmpCount := tmpCount + 1 }
-  pure s!"__tmp{tmpCount}"
+  pure s!"_Tv{tmpCount}"
+
+def mkIndexVarM (ty: JitType) (id : VarId) : FuncM LValue := do
+  let name := s!"_Iv{id}"
+  let lval ← getFunction >>= (·.newLocal none ty name)
+  modify fun view => { view with localVars := view.localVars.insert id lval }
+  pure lval
 
 def mkLocalVarM (ty: JitType) (name : Option String := none) : FuncM LValue := do
   match name with
