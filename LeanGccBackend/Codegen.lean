@@ -280,7 +280,17 @@ def getFuncDecl (n : FunId) : CodegenM Func := do
   match f with
   | some f => pure f
   | none   => throw s!"unknown function {n}"
-  
+
+def emitMarkPersistent [AsRValue τ] (d : Decl) (val : τ) : FuncM Unit := do
+  if d.resultType.isObj then
+    mkEvalM (←call (← getLeanMarkPersistent) val)
+
+def getTag [AsRValue τ] (xType : IRType) (val : τ) : FuncM RValue := do
+  if xType.isObj then do
+    call (← getLeanObjTag) val
+  else
+    asRValue val
+
 def emitMainFn : CodegenM Unit := do
   let env ← getEnv
   -- let main ← getDecl `main
