@@ -32,6 +32,7 @@ structure State where
   rvalueMap   : HashMap VarId RValue
   blockMap    : HashMap JoinPointId Block
   funcMap     : HashMap String Func
+  declMap     : HashMap FunId Func
   constantMap : HashMap String RValue
   globalMap   : HashMap String LValue
   structMap   : HashMap String (Struct × Array Field)
@@ -96,6 +97,7 @@ def «void*» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.VoidPtr)
 def «uint8_t» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.UInt8)
 def «uint16_t» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.UInt16)
 def «uint32_t» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.UInt32)
+def «uint64_t» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.UInt64)
 def «int» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.Int)
 def «int8_t» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.Int8)
 def «int16_t» : CodegenM JitType := getCtx >>= (·.getType TypeEnum.Int16)
