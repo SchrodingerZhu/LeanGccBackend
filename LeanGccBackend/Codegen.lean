@@ -92,10 +92,13 @@ def getNewLocalName : FuncM String := do
   pure s!"_Tv{tmpCount}"
 
 def mkIndexVarM (ty: JitType) (id : VarId) : FuncM LValue := do
-  let name := s!"_Iv{id}"
-  let lval ← getFunction >>= (·.newLocal none ty name)
-  modify fun view => { view with localVars := view.localVars.insert id lval }
-  pure lval
+  match (← get).localVars.find? id with
+  | none => do
+    let name := s!"_Iv{id}"
+    let lval ← getFunction >>= (·.newLocal none ty name)
+    modify fun view => { view with localVars := view.localVars.insert id lval }
+    pure lval
+  | some lval => pure lval
 
 def mkLocalVarM (ty: JitType) (name : Option String := none) : FuncM LValue := do
   match name with
@@ -274,14 +277,20 @@ def emitFnDecls : CodegenM Unit := do
     | some cName => emitExternDeclAux decl cName
     | none       => emitFnDecl decl (!modDecls.contains n)
 
-def emitApp [AsRValue φ] (f : φ) (args : Array RValue) : FuncM LValue := do
-  let res ← mkLocalVarM (←«lean_object*»)
+def argsRValue (args : Array Arg) : FuncM (Array RValue) := 
+  args.mapM fun arg => 
+    match arg with
+    | Arg.var x => do (mkIndexVarM (←«lean_object*») x) >>= (·.asRValue)
+    | Arg.irrelevant => do call (← getLeanBox) (← constantZero (← size_t))
+  
+def emitApp (f : VarId) (args : Array Arg) : FuncM RValue := do
+  let f ← mkIndexVarM (←«lean_object*») f
+  let args ← argsRValue args
   if args.size <= closureMaxArgs then do
-    mkAssignmentM res (←callArray (← getLeanApply args.size) (#[←  asRValue f] ++ args))
+    callArray (← getLeanApply args.size) (#[←  asRValue f] ++ args)
   else do
     let args ← getTempArrayObjArray args
-    mkAssignmentM res (←call (← getLeanApplyM) (f, args))
-  return res
+    call (← getLeanApplyM) (f, args)
 
 def getFuncDecl (n : FunId) : CodegenM Func := do
   let f ← get >>= (pure $ ·.declMap.find? n)
@@ -298,6 +307,69 @@ def getTag [AsRValue τ] (xType : IRType) (val : τ) : FuncM RValue := do
     call (← getLeanObjTag) val
   else
     asRValue val
+
+def emitLit  (t : IRType) (v : LitVal) : FuncM RValue := do
+  match v with
+  | LitVal.num n => do
+    mkConstant (← toCType t) n.toUInt64
+  | LitVal.str s => do
+    let char ← char
+    let ctx ← getCtx
+    let length := s.utf8ByteSize
+    let arr ← ctx.newArrayType none char length
+    let gv ← getAnnoymousGlobal arr >>= (Global.setInitializer · s.toUTF8)
+    let cstr ← arrayToPtr gv
+    let length ← mkConstant (←size_t) length.toUInt64
+    call (← getLeanMkStringFromBytes) (cstr, length)
+
+def emitIsShared (x : VarId) : FuncM RValue := do
+  let x ← mkIndexVarM (←«lean_object*») x
+  call (← getLeanIsShared) x
+
+def dispatchUnbox (t : IRType) : CodegenM Func :=
+  match t with
+  | IRType.usize  => do getLeanUnboxAux "size_t" (← size_t) 
+  | IRType.uint32 => do getLeanUnboxAux "uint32_t" (← uint32_t)
+  | IRType.uint64 => do getLeanUnboxAux "uint64_t" (← uint64_t)
+  | IRType.float  => do getLeanUnboxAux "float" (← double)
+  | _             => getLeanUnbox
+
+def emitUnbox (t : IRType) (x : VarId) : FuncM RValue := do
+  let x ← mkIndexVarM (←«lean_object*») x
+  let unbox ← dispatchUnbox t
+  call unbox x
+
+def dispatchBox (t : IRType) : CodegenM Func :=
+  match t with
+  | IRType.usize  => do getLeanBoxAux "size_t" (← size_t) 
+  | IRType.uint32 => do getLeanBoxAux "uint32_t" (← uint32_t)
+  | IRType.uint64 => do getLeanBoxAux "uint64_t" (← uint64_t)
+  | IRType.float  => do getLeanBoxAux "float" (← double)
+  | _             => getLeanBox
+
+def emitBox (x : VarId) (t : IRType) : FuncM RValue := do
+  let x ← mkIndexVarM (←«lean_object*») x
+  let box ← dispatchBox t
+  call box x
+
+def emitVDecl (z : VarId) (t : IRType) (v : Expr) : FuncM Unit := do
+  let rvalue ← match v with
+  -- | Expr.ctor c ys      => emitCtor z c ys
+  -- | Expr.reset n x      => emitReset z n x
+  -- | Expr.reuse x c u ys => emitReuse z x c u ys
+  -- | Expr.proj i x       => emitProj z i x
+  -- | Expr.uproj i x      => emitUProj z i x
+  -- | Expr.sproj n o x    => emitSProj z t n o x
+  -- | Expr.fap c ys       => emitFullApp z c ys
+  -- | Expr.pap c ys       => emitPartialApp z c ys
+    | Expr.ap x ys        => emitApp x ys
+    | Expr.box t x        => emitBox x t
+    | Expr.unbox x        => emitUnbox t x
+    | Expr.isShared x     => emitIsShared x
+    | Expr.lit v          => emitLit t v
+    | _                   => throw "not implemented"
+  mkAssignmentM (← mkIndexVarM (← toCType t) z) rvalue
+
 
 def emitMainFn : CodegenM Unit := do
   let env ← getEnv

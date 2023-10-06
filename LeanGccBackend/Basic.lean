@@ -36,6 +36,7 @@ structure State where
   constantMap : HashMap String RValue
   globalMap   : HashMap String LValue
   structMap   : HashMap String (Struct × Array Field)
+  glbCount    : Nat
   deriving Inhabited
 
 abbrev Error := String
@@ -70,6 +71,14 @@ def getOrCreateStruct (name : String)
     modify fun s => { s with structMap := s.structMap.insert name st }
     pure st
 
+def getAnnoymousGlobal (ty: JitType) : CodegenM LValue := do
+  let s ← get
+  let n := s.glbCount
+  modify fun s => { s with glbCount := s.glbCount + 1 }
+  let name := s!"_G{n}"
+  let ctx ← getCtx
+  ctx.newGlobal none GlobalKind.Internal ty name
+  
 def getOrCreateGlobal (name : String) (ty : JitType) (kind: GlobalKind := GlobalKind.Internal) (init : Option RValue := none) : CodegenM LValue := do
   match (← get).globalMap.find? name with
   | some v => pure v

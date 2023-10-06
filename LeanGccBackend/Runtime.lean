@@ -427,6 +427,9 @@ def getLeanIOResultShowError : CodegenM Func := do
 def getLeanMkString :  CodegenM Func := do
   importFunction "lean_mk_string" (← «lean_object*») #[((← «const char*»), "s")]
 
+def getLeanMkStringFromBytes : CodegenM Func := do
+  importFunction "lean_mk_string_from_bytes" (← «lean_object*») #[((← «const char*»), "s"), ((← size_t), "len")]
+
 def getLeanSetSTHeader : CodegenM Func := do
   let unsigned ← unsigned
   mkFunction "lean_set_st_header" (← void) 
