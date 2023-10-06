@@ -317,7 +317,9 @@ def emitLit (z : LValue) (t : IRType) (v : LitVal) : FuncM Unit := do
     let ctx ← getCtx
     let length := s.utf8ByteSize
     let arr ← ctx.newArrayType none char length
-    let gv ← getAnnoymousGlobal arr >>= (Global.setInitializer · s.toUTF8)
+    let (gv, initialized) ← getGlobalForLiteral s arr 
+    if !initialized then do
+      discard $ Global.setInitializer gv s.toUTF8
     let cstr ← arrayToPtr gv
     let length ← mkConstant (←size_t) length.toUInt64
     call (← getLeanMkStringFromBytes) (cstr, length)
