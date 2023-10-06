@@ -522,7 +522,7 @@ def getLeanCtorGetAux (name : String) (ty : JitType) : CodegenM Func := do
 def getLeanUnboxAux (name : String) (ty : JitType) : CodegenM Func := do
   mkFunction s!"lean_unbox_{name}" ty #[(← «lean_object*», "o")] fun blk params => do
   let o ← getParam! params 0
-  if (←ty.getSize) < (← size_t >>= (·.getSize))
+  if (←ty.getSize) < (← size_t >>= (·.getSize)) && (← ty.isIntegral)
   then do
     let unboxed ← call (← getLeanUnbox) o
     mkReturn blk (← unboxed ::: ty)
@@ -567,7 +567,7 @@ def getLeanBoxAux (name : String) (ty : JitType) : CodegenM Func := do
   mkFunction s!"lean_unbox_{name}" (← «lean_object*») #[(ty, "val")] fun blk params => do
   let val ← getParam! params 0
   let tySize ← ty.getSize
-  if tySize < (← size_t.getSize)
+  if tySize < (← size_t.getSize) && (← ty.isIntegral)
   then do
     let val ← val ::: size_t
     mkReturn blk (← call (← getLeanBox) val)
