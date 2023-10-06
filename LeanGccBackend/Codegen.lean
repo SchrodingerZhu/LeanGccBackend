@@ -3,6 +3,7 @@ import LeanGccBackend.Runtime
 import Lean.Compiler.IR.Boxing
 import LeanGccJit.Core
 import Lean.Compiler.IR.EmitC
+import Lean.Compiler.IR.EmitLLVM
 open LeanGccJit.Core
 
 namespace Lean.IR
@@ -283,14 +284,17 @@ def argsRValue (args : Array Arg) : FuncM (Array RValue) :=
     | Arg.var x => do (mkIndexVarM (←«lean_object*») x) >>= (·.asRValue)
     | Arg.irrelevant => do call (← getLeanBox) (← constantZero (← size_t))
   
-def emitApp (z: LValue) (f : VarId) (args : Array Arg) : FuncM Unit := do
+def emitAppRV (f : VarId) (args : Array Arg) : FuncM RValue := do
   let f ← mkIndexVarM (←«lean_object*») f
   let args ← argsRValue args
   if args.size <= closureMaxArgs then do
-    mkAssignmentM z $ ← callArray (← getLeanApply args.size) (#[←  asRValue f] ++ args)
+    callArray (← getLeanApply args.size) (#[←  asRValue f] ++ args)
   else do
     let args ← getTempArrayObjArray args
-    mkAssignmentM z $ ← call (← getLeanApplyM) (f, args)
+    call (← getLeanApplyM) (f, args)
+
+def emitApp (z: LValue) (f : VarId) (args : Array Arg) : FuncM Unit := do
+  mkAssignmentM z $ ← emitAppRV f args
 
 def getFuncDecl (n : FunId) : CodegenM Func := do
   let f ← get >>= (pure $ ·.declMap.find? n)
@@ -366,7 +370,7 @@ def emitPartialApp (z : LValue) (f : FunId) (args : Array Arg) : FuncM Unit := d
     let idx' ← mkConstant (←unsigned) idx.toUInt64
     mkEvalM $ ←call (← getLeanClosureSet) (z, idx', arg)
 
-def emitSimpleExternalCall (f : String) (ps : Array Param) (ys : Array Arg) (retTy : JitType) : FuncM Unit := do
+def emitSimpleExternalCall (f : String) (ps : Array Param) (ys : Array Arg) (retTy : JitType) : FuncM RValue := do
   let mut ps' := #[]
   let mut ys' := #[]
   for (p, y) in ps.zip ys do
@@ -379,9 +383,9 @@ def emitSimpleExternalCall (f : String) (ps : Array Param) (ys : Array Arg) (ret
     pure (ty, s!"arg{p.x.idx}")
   let f ← importFunction f retTy params
   let args ← argsRValue ys'
-  mkEvalM $ ←callArray f args
+  callArray f args
 
-def emitExternCall (f : FunId) (ps : Array Param) (extData : ExternAttrData) (ys : Array Arg) (t : IRType) : FuncM Unit := do
+def emitExternCall (f : FunId) (ps : Array Param) (extData : ExternAttrData) (ys : Array Arg) (t : IRType) : FuncM RValue := do
   let t ← toCType t
   match getExternEntryFor extData `c with
   | some (ExternEntry.standard _ extFn) => emitSimpleExternalCall extFn ps ys t
@@ -389,14 +393,18 @@ def emitExternCall (f : FunId) (ps : Array Param) (extData : ExternAttrData) (ys
   | some (ExternEntry.foreign _ extFn)  => emitSimpleExternalCall extFn ps ys t
   | _ => throw s!"failed to emit extern application '{f}'"
 
-def emitFullApp (z : LValue) (f : FunId) (ys : Array Arg) (t : IRType) : FuncM Unit := do
+def emitFullAppRV (f : FunId) (ys : Array Arg) (t : IRType) : FuncM RValue := do
   let decl ← getDecl f
   match decl with
-  | Decl.extern _ ps _ extData => emitExternCall f ps extData ys t
+  | Decl.extern _ ps _ extData => 
+    emitExternCall f ps extData ys t
   | _ =>
     let func ← getFuncDecl f
     let args ← argsRValue ys
-    mkAssignmentM z $ ← callArray func args
+    callArray func args
+
+def emitFullApp (z : LValue) (f : FunId) (ys : Array Arg) (t : IRType) : FuncM Unit := do
+  mkAssignmentM z $ ← emitFullAppRV f ys t
 
 def emitOffset (n : Nat) (offset : Nat) : FuncM RValue := do
   let unsigned ← unsigned
@@ -437,7 +445,6 @@ def emitAllocCtor (z : LValue) (c : CtorInfo) : FuncM Unit := do
   let tag ← mkConstant unsigned c.cidx.toUInt64
   mkAssignmentM z $ ← call (← getLeanAllocCtor) (tag, numObjs, scalarSz)
   
-
 def emitCtorSetArgs (z : LValue) (ys : Array Arg) : FuncM Unit := do
   let mut i := 0
   for y in ← argsRValue ys do
@@ -463,12 +470,39 @@ def emitReuse (z : LValue) (x : VarId) (c : CtorInfo) (updtHeader : Bool) (ys : 
   moveTo join
   emitCtorSetArgs z ys
 
+def emitReset (z : LValue) (n : Nat) (x : VarId) : FuncM Unit := do
+  let x ← mkIndexVarM (←«lean_object*») x
+  let join ← mkNewBlock
+  let isExclusive ← call (← getLeanIsExclusive) x
+  let unsigned ← unsigned
+  mkIfBranchM isExclusive
+    (do 
+      n.forM fun i => do
+        mkEvalM $ ←call (← getLeanCtorRelease) (x, ← mkConstant unsigned i.toUInt64)
+      mkAssignmentM z x
+      goto join
+    )
+    (do 
+      mkEvalM $ ←call (← getLeanDecRef) x
+      let unit ← call (← getLeanBox) (← constantZero (← size_t))
+      mkAssignmentM z unit
+      goto join
+    )
+  moveTo join
+
+def emitCtor (z : LValue) (c : CtorInfo) (ys : Array Arg) : FuncM Unit := do
+  if c.size == 0 && c.usize == 0 && c.ssize == 0 then do
+    let unit ← call (← getLeanBox) (← constantZero (← size_t))
+    mkAssignmentM z unit
+  else do
+    emitAllocCtor z c
+    emitCtorSetArgs z ys
 
 def emitVDecl (z : VarId) (t : IRType) (v : Expr) : FuncM Unit := do
   let z ← mkIndexVarM (← toCType t) z
   match v with
-  -- | Expr.ctor c ys      => emitCtor z c ys
-  -- | Expr.reset n x      => emitReset z n x
+    | Expr.ctor c ys      => emitCtor z c ys
+    | Expr.reset n x      => emitReset z n x
     | Expr.reuse x c u ys => emitReuse z x c u ys
     | Expr.proj i x       => emitProj z i x
     | Expr.uproj i x      => emitUProj z i x
@@ -480,7 +514,12 @@ def emitVDecl (z : VarId) (t : IRType) (v : Expr) : FuncM Unit := do
     | Expr.unbox x        => emitUnbox z t x
     | Expr.isShared x     => emitIsShared z x
     | Expr.lit v          => emitLit z t v
-    | _                   => throw "not implemented"
+
+def isTailCall (x : VarId) (v : Expr) (b : FnBody) : FuncM Bool := do
+  match v, b with
+  | Expr.fap _ _, FnBody.ret (Arg.var y) => return x == y
+  | Expr.ap _ _, FnBody.ret (Arg.var y) => return x == y
+  | _, _ => pure false
 
 
 def emitMainFn : CodegenM Unit := do
