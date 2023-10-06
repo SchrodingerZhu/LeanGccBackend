@@ -1,4 +1,5 @@
 import «LeanGccBackend»
+import «LeanGccBackend».Basic
 import «LeanGccBackend».Runtime
 import «LeanGccBackend».Codegen
 import «LeanGccJit»
@@ -42,6 +43,7 @@ def main : IO Unit := do
     let _ ← GccJit.getCStrArrayToLeanList
     let _ ← GccJit.getModuleInitializationFunction
     let _ ← GccJit.getLeanAllocClosure
+    let _ ← GccJit.getLeanCtorGetAux "float" (← GccJit.double)
     discard $ GccJit.getLeanClosureSet
     GccJit.emitMainFn
   

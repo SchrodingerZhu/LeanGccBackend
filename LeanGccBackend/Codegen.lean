@@ -365,7 +365,39 @@ def emitPartialApp (z : LValue) (f : FunId) (args : Array Arg) : FuncM Unit := d
   for arg in (← argsRValue args) do
     let idx' ← mkConstant (←unsigned) idx.toUInt64
     mkEvalM $ ←call (← getLeanClosureSet) (z, idx', arg)
-  
+
+def emitSimpleExternalCall (f : String) (ps : Array Param) (ys : Array Arg) (retTy : JitType) : FuncM Unit := do
+  let mut ps' := #[]
+  let mut ys' := #[]
+  for (p, y) in ps.zip ys do
+    if p.ty.isIrrelevant then
+      continue
+    ps' := ps'.push p
+    ys' := ys'.push y
+  let params ← ps'.mapM fun p => do
+    let ty ← toCType p.ty
+    pure (ty, s!"arg{p.x.idx}")
+  let f ← importFunction f retTy params
+  let args ← argsRValue ys'
+  mkEvalM $ ←callArray f args
+
+def emitExternCall (f : FunId) (ps : Array Param) (extData : ExternAttrData) (ys : Array Arg) (t : IRType) : FuncM Unit := do
+  let t ← toCType t
+  match getExternEntryFor extData `c with
+  | some (ExternEntry.standard _ extFn) => emitSimpleExternalCall extFn ps ys t
+  | some (ExternEntry.inline _ pat)     => throw s!"inline {pat} extern call is not implemented"
+  | some (ExternEntry.foreign _ extFn)  => emitSimpleExternalCall extFn ps ys t
+  | _ => throw s!"failed to emit extern application '{f}'"
+
+def emitFullApp (z : LValue) (f : FunId) (ys : Array Arg) (t : IRType) : FuncM Unit := do
+  let decl ← getDecl f
+  match decl with
+  | Decl.extern _ ps _ extData => emitExternCall f ps extData ys t
+  | _ =>
+    let func ← getFuncDecl f
+    let args ← argsRValue ys
+    mkAssignmentM z $ ← callArray func args
+
 def emitVDecl (z : VarId) (t : IRType) (v : Expr) : FuncM Unit := do
   let z ← mkIndexVarM (← toCType t) z
   match v with
@@ -374,8 +406,8 @@ def emitVDecl (z : VarId) (t : IRType) (v : Expr) : FuncM Unit := do
   -- | Expr.reuse x c u ys => emitReuse z x c u ys
   -- | Expr.proj i x       => emitProj z i x
   -- | Expr.uproj i x      => emitUProj z i x
-  -- | Expr.sproj n o x    => emitSProj z t n o x
-  -- | Expr.fap c ys       => emitFullApp z c ys
+    --| Expr.sproj n o x    => emitSProj z t n o x
+    | Expr.fap c ys       => emitFullApp z c ys t
     | Expr.pap c ys       => emitPartialApp z c ys
     | Expr.ap x ys        => emitApp z x ys
     | Expr.box t x        => emitBox z x t
@@ -424,11 +456,13 @@ def emitMainFn : CodegenM Unit := do
           mkAssignmentM res (←call (← getLeanMain) (realWorld))
         goto epilogue
       )
-      (goto epilogue)
-    let retTy := 
-      env.find? `main |>.map (·.type |>.getForallBody |>.appArg!) |>.getD default
+      (
+        goto epilogue
+      )
     moveTo epilogue
     mkEvalM (←call (← getLeanFinalizeTaskManager) ())
+    let retTy := 
+      env.find? `main |>.map (·.type |>.getForallBody |>.appArg!) |>.getD default
     mkIfBranchM (← call (← getLeanIOResultIsOk) res)
       (do 
         let ret ← mkLocalVarM int "ret"
