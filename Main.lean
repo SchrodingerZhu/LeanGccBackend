@@ -44,7 +44,9 @@ def main : IO Unit := do
     let _ ← GccJit.getModuleInitializationFunction
     let _ ← GccJit.getLeanAllocClosure
     let _ ← GccJit.getLeanCtorGetAux "float" (← GccJit.double)
-    discard $ GccJit.getLeanClosureSet
+    discard GccJit.getLeanClosureSet
+    discard GccJit.getLeanCtorSetTag
+    discard GccJit.getLeanCtorRelease
     GccJit.emitMainFn
   
   let _ ← ops.run state context

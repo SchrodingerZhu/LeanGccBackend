@@ -398,15 +398,81 @@ def emitFullApp (z : LValue) (f : FunId) (ys : Array Arg) (t : IRType) : FuncM U
     let args ← argsRValue ys
     mkAssignmentM z $ ← callArray func args
 
+def emitOffset (n : Nat) (offset : Nat) : FuncM RValue := do
+  let unsigned ← unsigned
+  let offset ← mkConstant unsigned offset.toUInt64
+  if n > 0 then
+    let ptrSz ← size_t >>= (·.getSize)
+    let shift ← mkConstant unsigned (ptrSz * n).toUInt64
+    return ← offset + shift
+  else
+    return offset
+
+def emitSProj (z : LValue) (t : IRType) (n offset : Nat) (x : VarId) : FuncM Unit := do
+  let f ← match t with
+    | IRType.float  => getLeanCtorGetAux "float" (← double)
+    | IRType.uint8  => getLeanCtorGetAux "uint8_t" (← uint8_t)
+    | IRType.uint16 => getLeanCtorGetAux "uint16_t" (← uint16_t)
+    | IRType.uint32 => getLeanCtorGetAux "uint32_t" (← uint32_t)
+    | IRType.uint64 => getLeanCtorGetAux "uint64_t" (← uint64_t)
+    | _             => throw "invalid instruction"
+  let x ← mkIndexVarM (←«lean_object*») x
+  let offset ← emitOffset n offset
+  mkAssignmentM z $ ← call f (x, offset)
+
+def emitUProj (z : LValue) (n : Nat) (x : VarId) : FuncM Unit := do
+  let x ← mkIndexVarM (←«lean_object*») x
+  let i ← mkConstant (←unsigned) n.toUInt64
+  mkAssignmentM z $ ← call (← getLeanCtorGetUsize) (x, i)
+
+def emitProj (z : LValue) (n : Nat) (x : VarId) : FuncM Unit := do
+  let x ← mkIndexVarM (←«lean_object*») x
+  let i ← mkConstant (←unsigned) n.toUInt64
+  mkAssignmentM z $ ← call (← getLeanCtorGet) (x, i)
+
+def emitAllocCtor (z : LValue) (c : CtorInfo) : FuncM Unit := do
+  let unsigned ← unsigned
+  let scalarSz ← mkConstant unsigned $ (← size_t >>= (·.getSize)) * c.usize + c.ssize |>.toUInt64
+  let numObjs ← mkConstant unsigned c.size.toUInt64
+  let tag ← mkConstant unsigned c.cidx.toUInt64
+  mkAssignmentM z $ ← call (← getLeanAllocCtor) (tag, numObjs, scalarSz)
+  
+
+def emitCtorSetArgs (z : LValue) (ys : Array Arg) : FuncM Unit := do
+  let mut i := 0
+  for y in ← argsRValue ys do
+    mkEvalM $ ← call (← getLeanCtorSet) (z, ← mkConstant (←unsigned) i.toUInt64, y)
+    i := i + 1
+
+def emitReuse (z : LValue) (x : VarId) (c : CtorInfo) (updtHeader : Bool) (ys : Array Arg) : FuncM Unit := do
+  let join ← mkNewBlock
+  let x ← mkIndexVarM (←«lean_object*») x
+  let isScalar ← call (← getLeanIsScalar) x
+  mkIfBranchM isScalar
+    (do 
+        emitAllocCtor z c
+        goto join
+    )
+    (do
+        mkAssignmentM z x
+        if updtHeader then do
+          let tag ← mkConstant (←unsigned) c.cidx.toUInt64
+          mkEvalM $ ←call (← getLeanCtorSetTag) (z, tag)
+        goto join
+    )
+  moveTo join
+  emitCtorSetArgs z ys
+
+
 def emitVDecl (z : VarId) (t : IRType) (v : Expr) : FuncM Unit := do
   let z ← mkIndexVarM (← toCType t) z
   match v with
   -- | Expr.ctor c ys      => emitCtor z c ys
   -- | Expr.reset n x      => emitReset z n x
-  -- | Expr.reuse x c u ys => emitReuse z x c u ys
-  -- | Expr.proj i x       => emitProj z i x
-  -- | Expr.uproj i x      => emitUProj z i x
-    --| Expr.sproj n o x    => emitSProj z t n o x
+    | Expr.reuse x c u ys => emitReuse z x c u ys
+    | Expr.proj i x       => emitProj z i x
+    | Expr.uproj i x      => emitUProj z i x
+    | Expr.sproj n o x    => emitSProj z t n o x
     | Expr.fap c ys       => emitFullApp z c ys t
     | Expr.pap c ys       => emitPartialApp z c ys
     | Expr.ap x ys        => emitApp z x ys

@@ -528,6 +528,14 @@ def getLeanCtorGetAux (name : String) (ty : JitType) : CodegenM Func := do
     let withOffset ← mkArrayAccess base (← getParam! params 1) >>= (·.getAddress none) >>= (bitcast · tyPtr)
     mkReturn blk (← withOffset.dereference none)
 
+def getLeanCtorGetUsize  : CodegenM Func := do
+  let objPtr ← «lean_object*»
+  let size_t ← size_t
+  mkFunction s!"lean_ctor_get_usize" size_t #[(objPtr, "o"), (← unsigned, "i")] fun blk params => do
+    let o ← getParam! params 0
+    let base ← call (← getLeanCtorObjCPtr) o >>= (bitcast · (← size_t.getPointer))
+    mkReturn blk $ ← mkArrayAccess base (← getParam! params 1) 
+
 def getLeanUnboxAux (name : String) (ty : JitType) : CodegenM Func := do
   mkFunction s!"lean_unbox_{name}" ty #[(← «lean_object*», "o")] fun blk params => do
   let o ← getParam! params 0
@@ -629,4 +637,27 @@ def getLeanClosureSet : CodegenM Func := do
     mkAssignment blk access v
     blk.endWithVoidReturn none
 
-    
+def getLeanCtorSetTag : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  mkFunction "lean_ctor_set_tag" (← void) #[(obj_ptr, "o"), (← unsigned, "tag")] fun blk params => do
+    let o ← getParam! params 0
+    let tag ← getParam! params 1
+    let st ← getLeanObject
+    let m_tag ← dereferenceField o st 3
+    mkAssignment blk m_tag tag
+    blk.endWithVoidReturn none
+
+def getLeanCtorRelease : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  mkFunction "lean_ctor_release" (← void) #[(obj_ptr, "o"), (← unsigned, "i")] fun blk params => do
+    let o ← getParam! params 0
+    let i ← getParam! params 1
+    let obj ← mkLocalVar blk (← «lean_object*» >>= (·.getPointer)) "obj"
+    let access ← mkArrayAccess (← call (← getLeanCtorObjCPtr) o) i
+    mkAssignment blk obj $ ← access.getAddress none
+    let obj ← obj.asRValue
+    mkEval blk $ 
+      ← call (← getLeanDec) (← obj.dereference none)
+    mkAssignment blk (← obj.dereference none) $ 
+      ← call (← getLeanBox) (← constantZero (← size_t))
+    blk.endWithVoidReturn none
