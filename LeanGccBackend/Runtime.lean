@@ -147,6 +147,15 @@ def Constant.SIZE_T_SIZE : CodegenM RValue :=
     let sizeTSize ← size_t.getSize
     ctx.newRValueFromUInt64 size_t sizeTSize.toUInt64
 
+def Constant.LEAN_CLOSURE_HEADER_SIZE : CodegenM RValue := do
+  getOrCreateConstant "LEAN_CLOSURE_HEADER_SIZE" do
+    let ctx ← getCtx
+    let size_t ← size_t
+    let headerSz : UInt64 := 8
+    let ptrSz ← Nat.toUInt64 <$> size_t.getSize
+    let remSz ← Nat.toUInt64 <$> Mul.mul 2 <$> (← uint16_t).getSize
+    ctx.newRValueFromUInt64 size_t (headerSz + ptrSz + remSz)
+
 def getLeanGetSlotIdx : CodegenM Func := do
   mkFunction "lean_get_slot_idx" (← unsigned) #[((← size_t), "sz")] fun blk params => do
     let sz ← getParam! params 0
@@ -579,3 +588,45 @@ def getLeanBoxAux (name : String) (ty : JitType) : CodegenM Func := do
     let func ← getLeanCtorSetAux name ty
     mkEval blk (← call func (obj, ←constantZero unsigned, val))
     mkReturn blk obj
+
+def getLeanAllocClosure : CodegenM Func := do
+  let unsigned ← unsigned
+  let obj_ptr ← «lean_object*»
+  mkFunction "lean_alloc_closure" obj_ptr #[(← «void*», "fn"), (unsigned, "arity"), (unsigned, "fixed")] fun blk params => do
+    let fn ← getParam! params 0
+    let arity ← getParam! params 1
+    let fixed ← getParam! params 2 >>= (· ::: (← size_t))
+    let headerSz ← Constant.LEAN_CLOSURE_HEADER_SIZE
+    let ptrSz ← Constant.SIZE_T_SIZE
+    let closureSz ← headerSz + (← ptrSz * fixed)
+    let alloc ← call (← getLeanAllocSmallObject) closureSz
+    let st@(ty, _) ← getLeanClosureObject
+    let closurePtr ← ty.asJitType >>= (·.getPointer)
+    let closureVar ← mkLocalVar blk closurePtr "closure"
+    mkAssignment blk closureVar $ ← alloc ::: closurePtr
+    let m_fn ← dereferenceField closureVar st 1
+    let m_arity ← dereferenceField closureVar st 2
+    let m_fixed ← dereferenceField closureVar st 3
+    let uint16_t ← uint16_t
+    mkAssignment blk m_fn fn
+    mkAssignment blk m_arity $ ← arity ::: uint16_t
+    mkAssignment blk m_fixed $ ← fixed ::: uint16_t
+    let ptr ← closureVar ::: obj_ptr
+    mkEval blk $ ← call (← getLeanSetSTHeader) (ptr, ← mkConstant unsigned Constant.LeanClosure, ← constantZero unsigned)
+    mkReturn blk ptr
+
+def getLeanClosureSet : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  mkFunction "lean_closure_set" (← void) #[(obj_ptr, "o"), (← unsigned, "i"), (obj_ptr, "v")] fun blk params => do
+    let o ← getParam! params 0
+    let i ← getParam! params 1
+    let v ← getParam! params 2
+    let st@(ty, _) ← getLeanClosureObject
+    let closurePtr ← ty.asJitType >>= (·.getPointer)
+    let closure ← o ::: closurePtr
+    let m_objs ← dereferenceField closure st 4
+    let access ← mkArrayAccess m_objs i
+    mkAssignment blk access v
+    blk.endWithVoidReturn none
+
+    

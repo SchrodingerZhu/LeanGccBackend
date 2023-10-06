@@ -283,14 +283,14 @@ def argsRValue (args : Array Arg) : FuncM (Array RValue) :=
     | Arg.var x => do (mkIndexVarM (←«lean_object*») x) >>= (·.asRValue)
     | Arg.irrelevant => do call (← getLeanBox) (← constantZero (← size_t))
   
-def emitApp (f : VarId) (args : Array Arg) : FuncM RValue := do
+def emitApp (z: LValue) (f : VarId) (args : Array Arg) : FuncM Unit := do
   let f ← mkIndexVarM (←«lean_object*») f
   let args ← argsRValue args
   if args.size <= closureMaxArgs then do
-    callArray (← getLeanApply args.size) (#[←  asRValue f] ++ args)
+    mkAssignmentM z $ ← callArray (← getLeanApply args.size) (#[←  asRValue f] ++ args)
   else do
     let args ← getTempArrayObjArray args
-    call (← getLeanApplyM) (f, args)
+    mkAssignmentM z $ ← call (← getLeanApplyM) (f, args)
 
 def getFuncDecl (n : FunId) : CodegenM Func := do
   let f ← get >>= (pure $ ·.declMap.find? n)
@@ -308,8 +308,8 @@ def getTag [AsRValue τ] (xType : IRType) (val : τ) : FuncM RValue := do
   else
     asRValue val
 
-def emitLit  (t : IRType) (v : LitVal) : FuncM RValue := do
-  match v with
+def emitLit (z : LValue) (t : IRType) (v : LitVal) : FuncM Unit := do
+  mkAssignmentM z $ ← match v with
   | LitVal.num n => do
     mkConstant (← toCType t) n.toUInt64
   | LitVal.str s => do
@@ -322,9 +322,9 @@ def emitLit  (t : IRType) (v : LitVal) : FuncM RValue := do
     let length ← mkConstant (←size_t) length.toUInt64
     call (← getLeanMkStringFromBytes) (cstr, length)
 
-def emitIsShared (x : VarId) : FuncM RValue := do
+def emitIsShared (z : LValue) (x : VarId) : FuncM Unit := do
   let x ← mkIndexVarM (←«lean_object*») x
-  call (← getLeanIsShared) x
+  mkAssignmentM z $ ← call (← getLeanIsShared) x
 
 def dispatchUnbox (t : IRType) : CodegenM Func :=
   match t with
@@ -334,10 +334,10 @@ def dispatchUnbox (t : IRType) : CodegenM Func :=
   | IRType.float  => do getLeanUnboxAux "float" (← double)
   | _             => getLeanUnbox
 
-def emitUnbox (t : IRType) (x : VarId) : FuncM RValue := do
+def emitUnbox (z : LValue) (t : IRType) (x : VarId) : FuncM Unit := do
   let x ← mkIndexVarM (←«lean_object*») x
   let unbox ← dispatchUnbox t
-  call unbox x
+  mkAssignmentM z $ ← call unbox x
 
 def dispatchBox (t : IRType) : CodegenM Func :=
   match t with
@@ -347,13 +347,26 @@ def dispatchBox (t : IRType) : CodegenM Func :=
   | IRType.float  => do getLeanBoxAux "float" (← double)
   | _             => getLeanBox
 
-def emitBox (x : VarId) (t : IRType) : FuncM RValue := do
+def emitBox (z : LValue) (x : VarId) (t : IRType) : FuncM Unit := do
   let x ← mkIndexVarM (←«lean_object*») x
   let box ← dispatchBox t
-  call box x
+  mkAssignmentM z $ ← call box x
 
+def emitPartialApp (z : LValue) (f : FunId) (args : Array Arg) : FuncM Unit := do
+  let decl ← getDecl f
+  let f ← getFuncDecl f
+  let address ← f.getAddress none
+  let arity ← mkConstant  (←unsigned) decl.params.size.toUInt64;
+  let fixed ← mkConstant  (←unsigned) args.size.toUInt64;
+  mkAssignmentM z $ ← call (← getLeanAllocClosure) (address, arity, fixed)
+  let mut idx := 0
+  for arg in (← argsRValue args) do
+    let idx' ← mkConstant (←unsigned) idx.toUInt64
+    mkEvalM $ ←call (← getLeanClosureSet) (z, idx', arg)
+  
 def emitVDecl (z : VarId) (t : IRType) (v : Expr) : FuncM Unit := do
-  let rvalue ← match v with
+  let z ← mkIndexVarM (← toCType t) z
+  match v with
   -- | Expr.ctor c ys      => emitCtor z c ys
   -- | Expr.reset n x      => emitReset z n x
   -- | Expr.reuse x c u ys => emitReuse z x c u ys
@@ -361,14 +374,13 @@ def emitVDecl (z : VarId) (t : IRType) (v : Expr) : FuncM Unit := do
   -- | Expr.uproj i x      => emitUProj z i x
   -- | Expr.sproj n o x    => emitSProj z t n o x
   -- | Expr.fap c ys       => emitFullApp z c ys
-  -- | Expr.pap c ys       => emitPartialApp z c ys
-    | Expr.ap x ys        => emitApp x ys
-    | Expr.box t x        => emitBox x t
-    | Expr.unbox x        => emitUnbox t x
-    | Expr.isShared x     => emitIsShared x
-    | Expr.lit v          => emitLit t v
+    | Expr.pap c ys       => emitPartialApp z c ys
+    | Expr.ap x ys        => emitApp z x ys
+    | Expr.box t x        => emitBox z x t
+    | Expr.unbox x        => emitUnbox z t x
+    | Expr.isShared x     => emitIsShared z x
+    | Expr.lit v          => emitLit z t v
     | _                   => throw "not implemented"
-  mkAssignmentM (← mkIndexVarM (← toCType t) z) rvalue
 
 
 def emitMainFn : CodegenM Unit := do
