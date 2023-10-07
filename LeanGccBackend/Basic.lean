@@ -29,8 +29,6 @@ structure GccContext where
   ctx        : Context
 
 structure State where
-  rvalueMap   : HashMap VarId RValue
-  blockMap    : HashMap JoinPointId Block
   funcMap     : HashMap String Func
   declMap     : HashMap FunId Func
   constantMap : HashMap String RValue

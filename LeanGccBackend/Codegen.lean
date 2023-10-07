@@ -63,6 +63,7 @@ structure FunctionView where
   tmpCount  : Nat
   localVars : HashMap VarId LValue
   entry     : Block
+  jps       : HashMap JoinPointId (Block × Array LValue)
   
 abbrev FuncM := StateT FunctionView CodegenM 
 
@@ -76,7 +77,7 @@ def withFunctionView
   let mut params' := HashMap.empty
   for (p, name) in params do
     params' := params'.insert name p
-  body.run' ⟨func, params', entry, 0, default, entry⟩
+  body.run' ⟨func, params', entry, 0, default, entry, default⟩
 
 def moveTo (blk: Block) : FuncM Unit := do
   modify fun view => { view with cursor := blk }
@@ -92,13 +93,20 @@ def getNewLocalName : FuncM String := do
   modify fun view => { view with tmpCount := tmpCount + 1 }
   pure s!"_Tv{tmpCount}"
 
-def mkIndexVarM (ty: JitType) (id : VarId) : FuncM LValue := do
+def declareIndexVar (ty : JitType) (id : VarId) : FuncM LValue := do
   match (← get).localVars.find? id with
   | none => do
-    let name := s!"_Iv{id}"
-    let lval ← getFunction >>= (·.newLocal none ty name)
+    let func ← getFunction
+    let name := s!"_I{id}"
+    let lval ← func.newLocal none ty name
     modify fun view => { view with localVars := view.localVars.insert id lval }
-    pure lval
+    return lval
+  | some lval => 
+    return lval
+
+def getIndexVar (id : VarId) : FuncM LValue := do
+  match (← get).localVars.find? id with
+  | none => throw s!"unknown local variable {id}"
   | some lval => pure lval
 
 def mkLocalVarM (ty: JitType) (name : Option String := none) : FuncM LValue := do
@@ -278,14 +286,16 @@ def emitFnDecls : CodegenM Unit := do
     | some cName => emitExternDeclAux decl cName
     | none       => emitFnDecl decl (!modDecls.contains n)
 
-def argsRValue (args : Array Arg) : FuncM (Array RValue) := 
-  args.mapM fun arg => 
-    match arg with
-    | Arg.var x => do (mkIndexVarM (←«lean_object*») x) >>= (·.asRValue)
+def argRValue (arg : Arg) : FuncM RValue := 
+  match arg with
+    | Arg.var x => do getIndexVar x >>= (·.asRValue)
     | Arg.irrelevant => do call (← getLeanBox) (← constantZero (← size_t))
+
+def argsRValue (args : Array Arg) : FuncM (Array RValue) := 
+  args.mapM argRValue
   
 def emitAppRV (f : VarId) (args : Array Arg) : FuncM RValue := do
-  let f ← mkIndexVarM (←«lean_object*») f
+  let f ← getIndexVar f
   let args ← argsRValue args
   if args.size <= closureMaxArgs then do
     callArray (← getLeanApply args.size) (#[←  asRValue f] ++ args)
@@ -329,7 +339,7 @@ def emitLit (z : LValue) (t : IRType) (v : LitVal) : FuncM Unit := do
     call (← getLeanMkStringFromBytes) (cstr, length)
 
 def emitIsShared (z : LValue) (x : VarId) : FuncM Unit := do
-  let x ← mkIndexVarM (←«lean_object*») x
+  let x ← getIndexVar x
   mkAssignmentM z $ ← call (← getLeanIsShared) x
 
 def dispatchUnbox (t : IRType) : CodegenM Func :=
@@ -341,7 +351,7 @@ def dispatchUnbox (t : IRType) : CodegenM Func :=
   | _             => getLeanUnbox
 
 def emitUnbox (z : LValue) (t : IRType) (x : VarId) : FuncM Unit := do
-  let x ← mkIndexVarM (←«lean_object*») x
+  let x ← getIndexVar x
   let unbox ← dispatchUnbox t
   mkAssignmentM z $ ← call unbox x
 
@@ -354,7 +364,7 @@ def dispatchBox (t : IRType) : CodegenM Func :=
   | _             => getLeanBox
 
 def emitBox (z : LValue) (x : VarId) (t : IRType) : FuncM Unit := do
-  let x ← mkIndexVarM (←«lean_object*») x
+  let x ← getIndexVar x
   let box ← dispatchBox t
   mkAssignmentM z $ ← call box x
 
@@ -425,17 +435,17 @@ def emitSProj (z : LValue) (t : IRType) (n offset : Nat) (x : VarId) : FuncM Uni
     | IRType.uint32 => getLeanCtorGetAux "uint32_t" (← uint32_t)
     | IRType.uint64 => getLeanCtorGetAux "uint64_t" (← uint64_t)
     | _             => throw "invalid instruction"
-  let x ← mkIndexVarM (←«lean_object*») x
+  let x ← getIndexVar x
   let offset ← emitOffset n offset
   mkAssignmentM z $ ← call f (x, offset)
 
 def emitUProj (z : LValue) (n : Nat) (x : VarId) : FuncM Unit := do
-  let x ← mkIndexVarM (←«lean_object*») x
+  let x ← getIndexVar x
   let i ← mkConstant (←unsigned) n.toUInt64
   mkAssignmentM z $ ← call (← getLeanCtorGetUsize) (x, i)
 
 def emitProj (z : LValue) (n : Nat) (x : VarId) : FuncM Unit := do
-  let x ← mkIndexVarM (←«lean_object*») x
+  let x ← getIndexVar x
   let i ← mkConstant (←unsigned) n.toUInt64
   mkAssignmentM z $ ← call (← getLeanCtorGet) (x, i)
 
@@ -454,7 +464,7 @@ def emitCtorSetArgs (z : LValue) (ys : Array Arg) : FuncM Unit := do
 
 def emitReuse (z : LValue) (x : VarId) (c : CtorInfo) (updtHeader : Bool) (ys : Array Arg) : FuncM Unit := do
   let join ← mkNewBlock
-  let x ← mkIndexVarM (←«lean_object*») x
+  let x ← getIndexVar x
   let isScalar ← call (← getLeanIsScalar) x
   mkIfBranchM isScalar
     (do 
@@ -472,7 +482,7 @@ def emitReuse (z : LValue) (x : VarId) (c : CtorInfo) (updtHeader : Bool) (ys : 
   emitCtorSetArgs z ys
 
 def emitReset (z : LValue) (n : Nat) (x : VarId) : FuncM Unit := do
-  let x ← mkIndexVarM (←«lean_object*») x
+  let x ← getIndexVar x
   let join ← mkNewBlock
   let isExclusive ← call (← getLeanIsExclusive) x
   let unsigned ← unsigned
@@ -500,7 +510,7 @@ def emitCtor (z : LValue) (c : CtorInfo) (ys : Array Arg) : FuncM Unit := do
     emitCtorSetArgs z ys
 
 def emitVDecl (z : VarId) (t : IRType) (v : Expr) : FuncM Unit := do
-  let z ← mkIndexVarM (← toCType t) z
+  let z ← getIndexVar z
   match v with
     | Expr.ctor c ys      => emitCtor z c ys
     | Expr.reset n x      => emitReset z n x
@@ -579,32 +589,184 @@ def emitUnreachable : FuncM Unit := do
   mkEvalM $ ←call builtinUnreachable ()
   mkReturnM $ ← fakeDefaultReturn
 
+def emitInc (x : VarId) (n : Nat) (check : Bool) : FuncM Unit := do
+  unless n > 0 do
+    let x ← getIndexVar x
+    if check then do 
+      if n == 1 then do
+        mkEvalM $ ←call (← getLeanInc) x
+      else do
+        let n ← mkConstant (←unsigned) n.toUInt64
+        mkEvalM $ ←call (← getLeanIncN) (x, n)
+    else do
+      if n == 1 then do
+        mkEvalM $ ←call (← getLeanIncRef) x
+      else do
+        let n ← mkConstant (←unsigned) n.toUInt64
+        mkEvalM $ ←call (← getLeanIncRefN) (x, n)
+
+def emitDec (x : VarId) (check : Bool) : FuncM Unit := do
+  let x ← getIndexVar x
+  if check then do 
+    mkEvalM $ ←call (← getLeanDec) x
+  else do
+    mkEvalM $ ←call (← getLeanDecRef) x
+
+def emitDel (x : VarId) : FuncM Unit := do
+  let x ← getIndexVar x
+  mkEvalM $ ←call (← getLeanFreeObject) x
+
+def emitSetTag (x : VarId) (i : Nat) : FuncM Unit := do
+  let x ← getIndexVar x
+  let i ← mkConstant (←unsigned) i.toUInt64
+  mkEvalM $ ←call (← getLeanCtorSetTag) (x, i)
+
+def emitSet (x : VarId) (i : Nat) (y : Arg) : FuncM Unit := do
+  let x ← getIndexVar x
+  let y ← argRValue y
+  let i ← mkConstant (←unsigned) i.toUInt64
+  mkEvalM $ ←call (← getLeanCtorSet) (x, i, y)
+
+def emitUSet (x : VarId) (i : Nat) (y : VarId) : FuncM Unit := do
+  let x ← getIndexVar x
+  let y ← getIndexVar y
+  let i ← mkConstant (←unsigned) i.toUInt64
+  mkEvalM $ ←call (← getLeanCtorSetUsize) (x, i, y)
+
+def emitSSet (x : VarId) (i : Nat) (o : Nat) (y : VarId) (t : IRType) : FuncM Unit := do
+  let f ← match t with
+    | IRType.float  => do 
+      getLeanCtorSetAux "float" $ ←double
+    | IRType.uint8  => do
+      getLeanCtorSetAux "uint8_t" $ ←uint8_t
+    | IRType.uint16 => do
+      getLeanCtorSetAux "uint16_t" $ ←uint16_t
+    | IRType.uint32 => do
+      getLeanCtorSetAux "uint32_t" $ ←uint32_t
+    | IRType.uint64 => do
+      getLeanCtorSetAux "uint64_t" $ ←uint64_t
+    | _             => throw s!"invalid type for sset: {t}"
+  let x ← getIndexVar x
+  let y ← getIndexVar y
+  let offset ← emitOffset o i
+  mkEvalM $ ←call f (x, offset, y)
+
+def getJoinPoint (j : JoinPointId) : FuncM (Block × Array LValue) := do
+  let view ← get
+  match view.jps.find? j with
+  | some jp => pure jp
+  | none    => throw s!"unknown join point {j}"
+
+def emitJmp (j : JoinPointId) (ys : Array Arg) : FuncM Unit := do
+  let (blk, params) ← getJoinPoint j
+  if params.size != ys.size then
+    throw s!"invalid number of arguments for join point {j}"
+  else
+    for (x, y) in params.zip $ ← argsRValue ys do
+      mkAssignmentM x y
+    goto blk
+
+partial def declareVars (f : FnBody) : FuncM Unit := do
+  match f with
+  | FnBody.vdecl x t _ b => do
+      let t ← toCType t
+      discard $ declareIndexVar t x
+      declareVars b
+  | FnBody.jdecl _ xs _ b => do
+      for param in xs do 
+        let t ← toCType param.ty
+        discard $ declareIndexVar t param.x
+      declareVars b
+  | e => do
+      if e.isTerminal then pure () else declareVars e.body
+
+mutual
+partial def emitFnBody (b : FnBody) : FuncM Unit := do
+  declareVars b
+  emitBlock b
+
+partial def emitJoinPoint (j : JoinPointId) (v : FnBody) : FuncM Unit := do
+  let cursor ← currentBlock
+  let jp ← getJoinPoint j
+  moveTo jp.fst
+  declareVars v
+  emitBlock v
+  moveTo cursor
+
+partial def emitCase (typeId : Name) (x : VarId) (ty: IRType) (alts: Array Alt) : FuncM Unit := do
+  currentBlock >>= (·.addComment none s!"case of {typeId}")
+  let cursor ← currentBlock
+  let x ← getIndexVar x
+  let tag ← getTag ty x
+  let mut cases := #[]
+  let mut fallback := none
+  let ctx ← getCtx
+  for i in alts do
+    match i with
+    | Alt.ctor ctor body => do
+      let blk ← mkNewBlock
+      moveTo blk
+      emitFnBody body
+      let value ← mkConstant (←unsigned) ctor.cidx.toUInt64
+      let case ← ctx.newCase value value blk
+      cases := cases.push case
+    | Alt.default body => do
+      let blk ← mkNewBlock
+      moveTo blk
+      emitFnBody body
+      fallback := some blk
+  let default ← match fallback with
+    | some blk => pure blk
+    | none     => do
+      let blk ← mkNewBlock
+      moveTo blk
+      emitUnreachable
+      pure blk
+  cursor.endWithSwitch none tag default cases
+  
 partial def emitBlock (b : FnBody) : FuncM Unit := 
   match b with
-  -- | FnBody.jdecl _ _  _ b      => emitBlock b
-  | FnBody.vdecl x t v b   => do
+  | FnBody.jdecl j _ v b => do
+    emitJoinPoint j v
+    emitBlock b
+  | FnBody.vdecl x t v b => do
     if ← isTailCall x v b then
       emitTailCall t v
     else
       emitVDecl x t v
       emitBlock b
-  -- | FnBody.inc x n c p b       =>
-  --   unless p do emitInc x n c
-  --   emitBlock b
-  -- | FnBody.dec x n c p b       =>
-  --   unless p do emitDec x n c
-  --   emitBlock b
-  -- | FnBody.del x b             => emitDel x; emitBlock b
-  -- | FnBody.setTag x i b        => emitSetTag x i; emitBlock b
-  -- | FnBody.set x i y b         => emitSet x i y; emitBlock b
-  -- | FnBody.uset x i y b        => emitUSet x i y; emitBlock b
-  -- | FnBody.sset x i o y t b    => emitSSet x i o y t; emitBlock b
+  | FnBody.inc x n c p b => do
+    unless p do emitInc x n c
+    emitBlock b
+  | FnBody.dec x n c p b => do
+    if n != 1 then 
+      throw "n != 1 when emitting dec"
+    else
+      unless p do emitDec x c
+      emitBlock b
+  | FnBody.del x b => do
+     emitDel x
+     emitBlock b
+  | FnBody.setTag x i b => do
+    emitSetTag x i
+    emitBlock b
+  | FnBody.set x i y b => do 
+    emitSet x i y
+    emitBlock b
+  | FnBody.uset x i y b => do
+    emitUSet x i y
+    emitBlock b
+  | FnBody.sset x i o y t b => do 
+    emitSSet x i o y t
+    emitBlock b
   | FnBody.mdata _ b           => emitBlock b
-  -- | FnBody.ret x               => emit "return "; emitArg x; emitLn ";"
-  -- | FnBody.case _ x xType alts => emitCase x xType alts
-  -- | FnBody.jmp j xs            => emitJmp j xs
+  | FnBody.ret x               => do
+    mkReturnM $ ← argRValue x
+  | FnBody.case u x xType alts => do
+    emitCase u x xType alts
+  | FnBody.jmp j xs            => emitJmp j xs
   | FnBody.unreachable         => emitUnreachable
-  | _ => throw "not implemented"
+end
 
 def emitMainFn : CodegenM Unit := do
   let env ← getEnv

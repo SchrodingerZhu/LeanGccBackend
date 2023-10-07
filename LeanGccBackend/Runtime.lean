@@ -571,7 +571,7 @@ def getLeanIOResultIsError : CodegenM Func := do
 
 def getLeanCtorSetAux (name : String) (ty : JitType) : CodegenM Func := do
   let objPtr ← «lean_object*»
-  mkFunction s!"lean_ctor_get_{name}" (← void) #[(objPtr, "o"), (← unsigned, "offset"), (ty, "value")] fun blk params => do
+  mkFunction s!"lean_ctor_set_{name}" (← void) #[(objPtr, "o"), (← unsigned, "offset"), (ty, "value")] fun blk params => do
     let o ← getParam! params 0
     let base ← call (← getLeanCtorObjCPtr) o >>= (bitcast · (← uint8_t >>= (·.getPointer)))
     let tyPtr ← ty.getPointer
@@ -579,9 +579,21 @@ def getLeanCtorSetAux (name : String) (ty : JitType) : CodegenM Func := do
     mkAssignment blk (← withOffset.dereference none) (← getParam! params 2)
     blk.endWithVoidReturn none
 
+def getLeanCtorSetUsize : CodegenM Func := do
+  let objPtr ← «lean_object*»
+  let size_t ← size_t
+  mkFunction s!"lean_ctor_set_usize" size_t #[(objPtr, "o"), (← unsigned, "i"), (size_t, "value")] fun blk params => do
+    let o ← getParam! params 0
+    let i ← getParam! params 1
+    let v ← getParam! params 2
+    let base ← call (← getLeanCtorObjCPtr) o >>= (bitcast · (← size_t.getPointer))
+    let access ← mkArrayAccess base i
+    mkAssignment blk access v
+    blk.endWithVoidReturn none
+
 def getLeanBoxAux (name : String) (ty : JitType) : CodegenM Func := do
   let size_t ← size_t
-  mkFunction s!"lean_unbox_{name}" (← «lean_object*») #[(ty, "val")] fun blk params => do
+  mkFunction s!"lean_box_{name}" (← «lean_object*») #[(ty, "val")] fun blk params => do
   let val ← getParam! params 0
   let tySize ← ty.getSize
   if tySize < (← size_t.getSize) && (← ty.isIntegral)
