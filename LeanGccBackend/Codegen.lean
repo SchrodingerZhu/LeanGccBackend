@@ -406,6 +406,7 @@ def emitFullAppRV (f : FunId) (ys : Array Arg) (t : IRType) : FuncM RValue := do
 def emitFullApp (z : LValue) (f : FunId) (ys : Array Arg) (t : IRType) : FuncM Unit := do
   mkAssignmentM z $ ← emitFullAppRV f ys t
 
+
 def emitOffset (n : Nat) (offset : Nat) : FuncM RValue := do
   let unsigned ← unsigned
   let offset ← mkConstant unsigned offset.toUInt64
@@ -515,12 +516,95 @@ def emitVDecl (z : VarId) (t : IRType) (v : Expr) : FuncM Unit := do
     | Expr.isShared x     => emitIsShared z x
     | Expr.lit v          => emitLit z t v
 
+def tailCallCompatible (f : Func) (g : Func) : FuncM Bool := do
+  let rf ← f.getReturnType >>= (·.unqualified)
+  let rg ← g.getReturnType >>= (·.unqualified)
+  if (← rf.isCompatibleWith rg) then do
+    let fc ← f.getParamCount
+    let gc ← g.getParamCount
+    if fc == gc then do
+      fc.allM fun i => do
+        let fa ← f.getParam i >>= (·.asRValue) >>= (·.getType) >>= (·.unqualified)
+        let ga ← g.getParam i >>= (·.asRValue) >>= (·.getType) >>= (·.unqualified)
+        fa.isCompatibleWith ga
+    else
+      return false
+  else
+    return false
+
 def isTailCall (x : VarId) (v : Expr) (b : FnBody) : FuncM Bool := do
   match v, b with
-  | Expr.fap _ _, FnBody.ret (Arg.var y) => return x == y
-  | Expr.ap _ _, FnBody.ret (Arg.var y) => return x == y
+  | Expr.fap f _, FnBody.ret (Arg.var y) => 
+    if x == y then do
+      let current ← getFunction
+      let f ← getFuncDecl f
+      tailCallCompatible current f
+    else 
+      return false
+  | Expr.ap _ a, FnBody.ret (Arg.var y) => 
+    if x == y && a.size <= closureMaxArgs then do
+      let current ← getFunction
+      let f ← getLeanApply a.size
+      tailCallCompatible current f
+    else 
+      return false
   | _, _ => pure false
 
+def emitTailCall (t: IRType) (v : Expr) : FuncM Unit := do
+  let rv ← match v with
+  | Expr.fap f ys => emitFullAppRV f ys t
+  | Expr.ap f ys  => emitAppRV f ys
+  | _ => throw "invalid tail call"
+  rv.setBoolRequireTailCall true
+  mkReturnM rv
+
+def fakeDefaultReturn : FuncM RValue := do
+  let f ← getFunction
+  let retTy ← f.getReturnType
+  if ← retTy.isIntegral then do
+    mkConstant retTy 0
+  else if ← retTy.isCompatibleWith (← double) then do
+    let ctx ← getCtx
+    ctx.newRValueFromDouble (← double) 0.0
+  else if ← retTy.isPointer >>= (pure ·.isSome) then do
+    let ctx ← getCtx
+    ctx.null retTy
+  else
+    throw "invalid return type"
+
+def emitUnreachable : FuncM Unit := do
+  let panicFn ← getLeanPanicUnreachable
+  mkEvalM $ ←call panicFn ()
+  let builtinUnreachable ← getBuiltinFunc "__builtin_unreachable"
+  mkEvalM $ ←call builtinUnreachable ()
+  mkReturnM $ ← fakeDefaultReturn
+
+partial def emitBlock (b : FnBody) : FuncM Unit := 
+  match b with
+  -- | FnBody.jdecl _ _  _ b      => emitBlock b
+  | FnBody.vdecl x t v b   => do
+    if ← isTailCall x v b then
+      emitTailCall t v
+    else
+      emitVDecl x t v
+      emitBlock b
+  -- | FnBody.inc x n c p b       =>
+  --   unless p do emitInc x n c
+  --   emitBlock b
+  -- | FnBody.dec x n c p b       =>
+  --   unless p do emitDec x n c
+  --   emitBlock b
+  -- | FnBody.del x b             => emitDel x; emitBlock b
+  -- | FnBody.setTag x i b        => emitSetTag x i; emitBlock b
+  -- | FnBody.set x i y b         => emitSet x i y; emitBlock b
+  -- | FnBody.uset x i y b        => emitUSet x i y; emitBlock b
+  -- | FnBody.sset x i o y t b    => emitSSet x i o y t; emitBlock b
+  | FnBody.mdata _ b           => emitBlock b
+  -- | FnBody.ret x               => emit "return "; emitArg x; emitLn ";"
+  -- | FnBody.case _ x xType alts => emitCase x xType alts
+  -- | FnBody.jmp j xs            => emitJmp j xs
+  | FnBody.unreachable         => emitUnreachable
+  | _ => throw "not implemented"
 
 def emitMainFn : CodegenM Unit := do
   let env ← getEnv
