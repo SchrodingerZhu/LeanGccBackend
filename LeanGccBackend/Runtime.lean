@@ -13,8 +13,6 @@ def getLeanObject : CodegenM (Struct × Array Field) := do
     (← bitfield unsigned 8 "m_other"),
     (← bitfield unsigned 8 "m_tag")
   ]
-
-
 def «lean_object» : CodegenM JitType := do
   getLeanObject >>= (·.fst.asJitType)
 
@@ -120,14 +118,14 @@ def getLeanIncHeartbeat : CodegenM Func := do
 def getLeanInternalPanic : CodegenM Func := do
   importFunction "lean_internal_panic" (←void) #[((←«const char*»), "msg")]
 
-def getLeanPanicOutOfMemory : CodegenM Func := do
-  importFunction "lean_panic_out_of_memory" (←void) #[]
+def getLeanInternalPanicOutOfMemory : CodegenM Func := do
+  importFunction "lean_internal_panic_out_of_memory" (←void) #[]
 
-def getLeanPanicUnreachable : CodegenM Func := do
-  importFunction "lean_panic_unreachable" (←void) #[]
+def getLeanInternalPanicUnreachable : CodegenM Func := do
+  importFunction "lean_internal_panic_unreachable" (←void) #[]
 
-def getLeanPanicRcOverflow : CodegenM Func := do
-  importFunction "lean_panic_rc_overflow" (←void) #[]
+def getLeanInternalPanicRcOverflow : CodegenM Func := do
+  importFunction "lean_internal_panic_rc_overflow" (←void) #[]
 
 def getLeanAlign : CodegenM Func := do
   let size_t ← size_t
@@ -193,12 +191,13 @@ def getLeanAllocCtorMemory : CodegenM Func := do
 def getLeanSmallObjectSize : CodegenM Func := do
   mkFunction "lean_small_object_size" (← unsigned) #[((← «lean_object*»), "o")] fun blk params => do
     let o ← getParam! params 0
-    mkReturn blk $ (← call (← getLeanSmallMemSize) (←o ::: (← unsigned)))
+    mkReturn blk $ (← call (← getLeanSmallMemSize) (←o ::: (← «void*»)))
 
 def getLeanFreeSmallObject : CodegenM Func := do
   mkFunction "lean_free_small_object" (← void) #[((← «lean_object*»), "o")] fun blk params => do
     let o ← getParam! params 0
-    mkReturn blk $ (← call (← getLeanFreeSmall) (←o ::: (← «void*»)))
+    mkEval blk $ (← call (← getLeanFreeSmall) (←o ::: (← «void*»)))
+    blk.endWithVoidReturn none
 
 def getLeanAllocObject : CodegenM Func := do
   importFunction "lean_alloc_object" (← «lean_object*») #[((← size_t), "sz")]
@@ -242,7 +241,14 @@ def getLeanIsPersistent : CodegenM Func := do
     let obj ← getParam! params 0
     let ty ← getLeanObject
     let res ← (← dereferenceField obj ty 0) ::: (← int)
-    mkReturn blk $ (← res === (1 : UInt64))
+    mkReturn blk $ (← res === (0 : UInt64))
+
+def getLeanHasRc : CodegenM Func := do
+  mkFunction "lean_is_persistent" (← bool) #[((← «lean_object*»), "o")] fun blk params => do
+    let obj ← getParam! params 0
+    let ty ← getLeanObject
+    let res ← (← dereferenceField obj ty 0) ::: (← int)
+    mkReturn blk $ (← res =/= (0 : UInt64))
 
 def getLeanIncRefCold : CodegenM Func := do
   importFunction "lean_inc_ref_cold" (←void) #[((← «lean_object*»), "o")]
@@ -347,8 +353,7 @@ private def leanIsMux (name : String) (tag_ : UInt64) : CodegenM Func := do
 
 def getLeanIsClosure : CodegenM Func := leanIsMux "closure" Constant.LeanClosure
 def getLeanIsArray : CodegenM Func := leanIsMux "array" Constant.LeanArray
-def getLeanIsStructArray : CodegenM Func := leanIsMux "struct_array" Constant.LeanStructArray
-def getLeanIsScalarArray : CodegenM Func := leanIsMux "scalar_array" Constant.LeanScalarArray
+def getLeanIsScalarArray : CodegenM Func := leanIsMux "sarray" Constant.LeanScalarArray
 def getLeanIsString : CodegenM Func := leanIsMux "string" Constant.LeanString
 def getLeanIsMPZ : CodegenM Func := leanIsMux "mpz" Constant.LeanMPZ
 def getLeanIsThunk : CodegenM Func := leanIsMux "thunk" Constant.LeanThunk
@@ -582,7 +587,7 @@ def getLeanCtorSetAux (name : String) (ty : JitType) : CodegenM Func := do
 def getLeanCtorSetUsize : CodegenM Func := do
   let objPtr ← «lean_object*»
   let size_t ← size_t
-  mkFunction s!"lean_ctor_set_usize" size_t #[(objPtr, "o"), (← unsigned, "i"), (size_t, "value")] fun blk params => do
+  mkFunction s!"lean_ctor_set_usize" (← void) #[(objPtr, "o"), (← unsigned, "i"), (size_t, "value")] fun blk params => do
     let o ← getParam! params 0
     let i ← getParam! params 1
     let v ← getParam! params 2
@@ -673,3 +678,85 @@ def getLeanCtorRelease : CodegenM Func := do
     mkAssignment blk (← obj.dereference none) $ 
       ← call (← getLeanBox) (← constantZero (← size_t))
     blk.endWithVoidReturn none
+
+def getLeanDealloc : CodegenM Func := do
+  importFunction "lean_dealloc" (← void) #[((← «lean_object*»), "o")]
+
+def populateRuntimeTable : CodegenM Unit := do
+    discard getLeanIsScalar
+    discard getLeanBox
+    discard getLeanUnbox
+    discard getLeanSetExitOnPanic
+    discard getLeanSetPanicMessages
+    discard getLeanPanicFn
+    discard getLeanInternalPanic
+    discard getLeanInternalPanicOutOfMemory
+    discard getLeanInternalPanicUnreachable
+    discard getLeanAlign
+    discard getLeanGetSlotIdx
+    discard getLeanAllocSmall
+    discard getLeanFreeSmall
+    discard getLeanSmallMemSize
+    discard getLeanIncHeartbeat
+    discard getLeanAllocObject
+    discard getLeanAllocCtorMemory
+    discard getLeanSmallObjectSize
+    discard getLeanFreeSmallObject
+    discard getLeanAllocObject
+    discard getLeanFreeObject
+    discard getLeanPtrTag
+    discard getLeanPtrOther
+    discard getLeanObjectByteSize
+    discard getLeanIsMT
+    discard getLeanIsST
+    discard getLeanIsPersistent
+    discard getLeanHasRc
+    discard getLeanIncRefCold
+    discard getLeanIncRefNCold
+    discard getLeanIncRef
+    discard getLeanIncRefN
+    discard getLeanDecRefCold
+    discard getLeanDecRef
+    discard getLeanInc
+    discard getLeanIncN
+    discard getLeanDec
+    discard getLeanDealloc
+    discard getLeanIsCtor
+    discard getLeanIsClosure
+    discard getLeanIsArray
+    discard getLeanIsScalarArray
+    discard getLeanIsString
+    discard getLeanIsMPZ
+    discard getLeanIsThunk
+    discard getLeanIsTask
+    discard getLeanIsExternal
+    discard getLeanIsRef
+    discard getLeanObjTag
+    discard getLeanIsExclusive
+    discard getLeanIsShared
+    discard getLeanMarkMT
+    discard getLeanMarkPersistent
+    discard getLeanSetSTHeader
+    discard getLeanCtorObjCPtr
+    discard getLeanAllocCtor
+    discard getLeanCtorGet
+    discard getLeanCtorSet
+    discard getLeanCtorSetTag
+    discard getLeanCtorRelease
+    discard getLeanCtorGetUsize
+    discard $ getLeanCtorGetAux "uint8" (← uint8_t)
+    discard $ getLeanCtorGetAux "uint16" (← uint16_t)
+    discard $ getLeanCtorGetAux "uint32" (← uint32_t)
+    discard $ getLeanCtorGetAux "uint64" (← uint64_t)
+    discard $ getLeanCtorGetAux "float" (← double)
+    discard getLeanCtorSetUsize
+    discard $ getLeanCtorSetAux "uint8" (← uint8_t)
+    discard $ getLeanCtorSetAux "uint16" (← uint16_t)
+    discard $ getLeanCtorSetAux "uint32" (← uint32_t)
+    discard $ getLeanCtorSetAux "uint64" (← uint64_t)
+    discard $ getLeanCtorSetAux "float" (← double)
+    discard getLeanAllocClosure
+    discard getLeanClosureSet
+    (16 : Nat).forM fun i => do
+      discard $ getLeanApply i
+    discard getLeanApplyM

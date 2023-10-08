@@ -583,7 +583,7 @@ def fakeDefaultReturn : FuncM RValue := do
     throw "invalid return type"
 
 def emitUnreachable : FuncM Unit := do
-  let panicFn ← getLeanPanicUnreachable
+  let panicFn ← getLeanInternalPanicUnreachable
   mkEvalM $ ←call panicFn ()
   let builtinUnreachable ← getBuiltinFunc "__builtin_unreachable"
   mkEvalM $ ←call builtinUnreachable ()

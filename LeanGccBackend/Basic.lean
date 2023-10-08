@@ -21,20 +21,20 @@ namespace GccJit
 def leanMainFn := "_lean_main"
 
 structure GccContext where
-  env        : Environment
-  modName    : Name
-  jpMap      : JPParamsMap := {}
-  mainFn     : FunId := default
-  mainParams : Array Param := #[]
-  ctx        : Context
+  env          : Environment
+  modName      : Name
+  jpMap        : JPParamsMap := {}
+  mainFn       : FunId := default
+  mainParams   : Array Param := #[]
+  ctx          : Context
 
 structure State where
-  funcMap     : HashMap String Func
-  declMap     : HashMap FunId Func
-  constantMap : HashMap String RValue
-  globalMap   : HashMap String LValue
-  structMap   : HashMap String (Struct × Array Field)
-  glbCount    : HashMap String LValue
+  funcMap      : HashMap String Func
+  declMap      : HashMap FunId Func
+  constantMap  : HashMap String RValue
+  globalMap    : HashMap String LValue
+  structMap    : HashMap String (Struct × Array Field)
+  glbCount     : HashMap String LValue
   deriving Inhabited
 
 abbrev Error := String

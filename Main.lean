@@ -22,31 +22,7 @@ def main : IO Unit := do
   let state : GccJit.State := default 
   ctx.setIntOption IntOption.OptimizationLevel 3
   let ops := do
-    let _ ← GccJit.getLeanBox
-    let _ ← GccJit.getLeanUnbox
-    let _ ← GccJit.getLeanPtrTag
-    let _ ← GccJit.getLeanPtrOther
-    let _ ← GccJit.getLeanAllocSmallObject
-    let _ ← GccJit.getLeanAllocCtorMemory
-    let _ ← GccJit.getLeanIsMT
-    let _ ← GccJit.getLeanIncRef
-    let _ ← GccJit.getLeanIncRefN
-    let _ ← GccJit.getLeanDecRef
-    let _ ← GccJit.getLeanInc
-    let _ ← GccJit.getLeanIncN
-    let _ ← GccJit.getLeanDec
-    let _ ← GccJit.getLeanObjTag
-    let _ ← GccJit.getLeanIsExclusive
-    let _ ← GccJit.getLeanIsShared
-    let _ ← GccJit.getLeanCtorObjCPtr
-    let _ ← GccJit.getLeanCtorSet
-    let _ ← GccJit.getCStrArrayToLeanList
-    let _ ← GccJit.getModuleInitializationFunction
-    let _ ← GccJit.getLeanAllocClosure
-    let _ ← GccJit.getLeanCtorGetAux "float" (← GccJit.double)
-    discard GccJit.getLeanClosureSet
-    discard GccJit.getLeanCtorSetTag
-    discard GccJit.getLeanCtorRelease
+    GccJit.populateRuntimeTable
     GccJit.emitMainFn
   
   let _ ← ops.run state context
