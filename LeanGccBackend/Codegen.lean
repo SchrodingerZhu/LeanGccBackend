@@ -243,27 +243,36 @@ def toCName (n : Name) : CodegenM String := do
 def emitFnDeclAux (decl : Decl) (cppBaseName : String) (isExternal : Bool) : CodegenM Unit := do
   let ps := decl.params
   let env ← getEnv
-  let kind := if ps.isEmpty && isClosedTermName env decl.name then
-    FunctionKind.Internal
-  else
-    if isExternal then FunctionKind.Imported
+  if ps.isEmpty then do
+    let kind := if isClosedTermName env decl.name then
+      GlobalKind.Internal
+    else if isExternal then 
+      GlobalKind.Imported
+    else GlobalKind.Exported
+    let retTy ← toCType decl.resultType
+    discard $ getOrCreateGlobal cppBaseName retTy (kind := kind)
+  else do
+    let kind := if isClosedTermName env decl.name then
+      FunctionKind.Internal
+    else if isExternal then 
+      FunctionKind.Imported
     else FunctionKind.Exported
-  let retTy ← toCType decl.resultType
-  let ps := if isExternC env decl.name then ps.filter (fun p => !p.ty.isIrrelevant) else ps
-  let ctx ← getCtx
-  let params ←
-    if ps.size > closureMaxArgs && isBoxedName decl.name then do
-      pure #[← ctx.newParam none (← «lean_object*» >>= (·.getPointer)) "args"]
-    else do
-      let names := ps.map (fun p => s!"arg{p.x.idx}")
-      let tys ← ps.mapM fun p => toCType p.ty
-      let mut params := #[]
-      for (ty, name) in tys.zip names do
-        let param ← ctx.newParam none ty name
-        params := params.push param
-      pure params
-  let func ← ctx.newFunction none kind retTy cppBaseName params false
-  modify fun s => { s with declMap := s.declMap.insert decl.name func }
+    let retTy ← toCType decl.resultType
+    let ps := if isExternC env decl.name then ps.filter (fun p => !p.ty.isIrrelevant) else ps
+    let ctx ← getCtx
+    let params ←
+      if ps.size > closureMaxArgs && isBoxedName decl.name then do
+        pure #[← ctx.newParam none (← «lean_object*» >>= (·.getPointer)) "args"]
+      else do
+        let names := ps.map (fun p => s!"arg{p.x.idx}")
+        let tys ← ps.mapM fun p => toCType p.ty
+        let mut params := #[]
+        for (ty, name) in tys.zip names do
+          let param ← ctx.newParam none ty name
+          params := params.push param
+        pure params
+    let func ← ctx.newFunction none kind retTy cppBaseName params false
+    modify fun s => { s with declMap := s.declMap.insert decl.name func }
 
 def emitExternDeclAux (decl : Decl) (cName : String) : CodegenM Unit := do
   let env ← getEnv
