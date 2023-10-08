@@ -19,17 +19,42 @@ def getDecl (n : Name) : CodegenM Decl := do
   | some d => pure d
   | none   => throw s!"unknown declaration {n}"
 
+def getFuncDecl (n : FunId): CodegenM Func := do
+  let f ← get >>= (pure $ ·.declMap.find? n)
+  match f with
+  | some f => pure f.fst
+  | none   => throw s!"unknown function {n}"
+
+def getFuncDecl' (n : FunId): CodegenM (Func × Array (LeanGccJit.Core.Param × String)) := do
+  let f ← get >>= (pure $ ·.declMap.find? n)
+  match f with
+  | some f => pure f
+  | none   => throw s!"unknown function {n}"  
+
+def throwInvalidExportName {α : Type} (n : Name) : CodegenM α :=
+  throw s!"invalid export name '{n}'"
+
+def toCInitName (n : Name) : CodegenM String := do
+  let env ← getEnv;
+  -- TODO: we should support simple export names only
+  match getExportNameFor? env n with
+  | some (.str .anonymous s) => return "_init_" ++ s
+  | some _                   => throwInvalidExportName n
+  | none                     => pure ("_init_" ++ n.mangle)
+
+def dispatchUnbox (t : IRType) : CodegenM Func :=
+  match t with
+  | IRType.usize  => do getLeanUnboxAux "size_t" (← size_t) 
+  | IRType.uint32 => do getLeanUnboxAux "uint32_t" (← uint32_t)
+  | IRType.uint64 => do getLeanUnboxAux "uint64_t" (← uint64_t)
+  | IRType.float  => do getLeanUnboxAux "float" (← double)
+  | _             => getLeanUnbox
+
 def Constant.SEM_FAILCRITICALERRORS : CodegenM RValue := do
   mkConstant (←unsigned) 1 
 
 def getSetErrorMode : CodegenM Func := do
   importFunction "SetErrorMode" (←unsigned) #[((←unsigned), "uMode")]
-
-def getLeanMain : CodegenM Func := do
-  let obj_ptr ← «lean_object*»
-  importFunction "__TODO__LEAN_MAIN" obj_ptr #[
-    (obj_ptr, "arg_list"), (obj_ptr, "real_world")
-  ]
 
 def getCStrArrayToLeanList : CodegenM Func := do
   let cstr ← «const char*»
@@ -97,8 +122,7 @@ def declareIndexVar (ty : JitType) (id : VarId) : FuncM LValue := do
   match (← get).localVars.find? id with
   | none => do
     let func ← getFunction
-    let name := s!"_I{id}"
-    let lval ← func.newLocal none ty name
+    let lval ← func.newLocal none ty s!"{id}"
     modify fun view => { view with localVars := view.localVars.insert id lval }
     return lval
   | some lval => 
@@ -179,6 +203,81 @@ def goto (x : Block) : FuncM Unit :=
 def mkReturnM [AsRValue τ] (x : τ) : FuncM Unit := do
   mkReturn (←currentBlock) x
 
+def toCName (n : Name) : CodegenM String := do
+  let env ← getEnv;
+  match getExportNameFor? env n with
+  | some (.str .anonymous s) => pure s
+  | some _                   => throwInvalidExportName n
+  | none                     => if n == `main then pure leanMainFn else pure n.mangle
+
+def toCType : IRType → CodegenM JitType
+  | IRType.float      => double
+  | IRType.uint8      => uint8_t
+  | IRType.uint16     => uint16_t
+  | IRType.uint32     => uint32_t
+  | IRType.uint64     => uint64_t
+  | IRType.usize      => size_t
+  | IRType.object     => «lean_object*»
+  | IRType.tobject    => «lean_object*»
+  | IRType.irrelevant => «lean_object*»
+  | IRType.struct _ _ => throw "IRType.struct cannot be converted to JitType yet"
+  | IRType.union _ _  => throw "IRType.union cannot be converted to JitType yet"
+
+def emitDeclInit (d : Decl) (res: LValue) (errBlk: Block) : FuncM Unit := do
+  let env ← getEnv
+  let n := d.name
+  let world ← mkLocalVarM (← «lean_object*»)
+  let builtin ← getParamM! "builtin" >>= (·.asRValue)
+  mkAssignmentM world $ ← call (← getLeanIOMkWorld) ()
+  if isIOUnitInitFn env n then do
+    let f ← getFuncDecl $ ← toCName n
+    let mut nextBlk := none
+    if isIOUnitBuiltinInitFn env n then do
+      let blkBuiltin ← mkNewBlock
+      let blkNotBuiltin ← mkNewBlock
+      currentBlock >>= (·.endWithConditional none builtin blkBuiltin blkNotBuiltin)
+      nextBlk := some blkNotBuiltin
+      moveTo blkBuiltin
+    mkAssignmentM res $ ← call f world
+    let isErr ← call (← getLeanIOResultIsError) res
+    let next ← match nextBlk with
+    | some blk => pure blk
+    | none => mkNewBlock
+    currentBlock >>= (·.endWithConditional none isErr errBlk next)
+    moveTo next
+    mkEvalM $ ←call (← getLeanDecRef) res
+  else if d.params.size == 0 then do
+    let gv ← getOrCreateGlobal (← toCName n) (← toCType d.resultType)
+    match getInitFnNameFor? env n with
+    | some initFn =>
+      let mut nextBlk := none
+      if getBuiltinInitFnNameFor? env n |>.isSome then
+        let blkBuiltin ← mkNewBlock
+        let blkNotBuiltin ← mkNewBlock
+        currentBlock >>= (·.endWithConditional none builtin blkBuiltin blkNotBuiltin)
+        nextBlk := some blkNotBuiltin
+        moveTo blkBuiltin
+      let f ← getFuncDecl $ ← toCName initFn
+      mkAssignmentM res $ ← call f world
+      let isErr ← call (← getLeanIOResultIsError) res
+      let next ← match nextBlk with
+      | some blk => pure blk
+      | none => mkNewBlock
+      currentBlock >>= (·.endWithConditional none isErr errBlk next)
+      moveTo next
+      let value ← call (← getLeanIOResultGetValue) res
+      if d.resultType.isScalar then
+        let unboxed ← call (← dispatchUnbox d.resultType) value
+        mkAssignmentM gv unboxed
+      else
+        mkAssignmentM gv value
+        mkEvalM $ ←call (← getLeanMarkPersistent) gv
+      mkEvalM $ ←call (← getLeanDecRef) res
+    | _ =>
+      let f ← getFuncDecl $ ← toCInitName n
+      mkAssignmentM gv $ ← call f ()
+      mkEvalM $ ←call (← getLeanMarkPersistent) gv
+
 def getModuleInitializationFunction : CodegenM Func := do
   let bool ← bool
   let uint8_t ← uint8_t
@@ -199,17 +298,21 @@ def getModuleInitializationFunction : CodegenM Func := do
       )
       (do 
         mkAssignmentM _G_initialized (← constantOne bool)
-        for i in importedInits do
-          mkAssignmentM res (←call i (← getParamM! "builtin", ← getParamM! "w"))
-          let isErr ← call (← getLeanIOResultIsError) res
-          mkIfBranchM isErr
-            (do 
-              mkReturnM res
-            )
-            (do 
-              mkEvalM (←call (← getLeanDecRef) res)
-            )
-        currentBlock >>= (·.addComment none "TODO: generate decl init code")
+        let decls := getDecls env
+        if !importedInits.isEmpty || !decls.isEmpty then do
+          let errBlk ← mkNewBlock "err"
+          errBlk.endWithReturn none $ ← res.asRValue
+          for i in importedInits do
+            mkAssignmentM res (←call i (← getParamM! "builtin", ← getParamM! "w"))
+            let isErr ← call (← getLeanIOResultIsError) res
+            mkIfBranchM isErr
+              (do 
+                goto errBlk
+              )
+              (do 
+                mkEvalM (←call (← getLeanDecRef) res)
+              )
+          decls.reverse.forM (emitDeclInit · res errBlk)
         goto epilogue 
       )
     moveTo epilogue
@@ -217,32 +320,10 @@ def getModuleInitializationFunction : CodegenM Func := do
     let ok ← call (← getLeanIOResultMkOk) unit
     mkReturnM ok
 
-def toCType : IRType → CodegenM JitType
-  | IRType.float      => double
-  | IRType.uint8      => uint8_t
-  | IRType.uint16     => uint16_t
-  | IRType.uint32     => uint32_t
-  | IRType.uint64     => uint64_t
-  | IRType.usize      => size_t
-  | IRType.object     => «lean_object*»
-  | IRType.tobject    => «lean_object*»
-  | IRType.irrelevant => «lean_object*»
-  | IRType.struct _ _ => throw "IRType.struct cannot be converted to JitType yet"
-  | IRType.union _ _  => throw "IRType.union cannot be converted to JitType yet"
-
-def throwInvalidExportName {α : Type} (n : Name) : CodegenM α :=
-  throw s!"invalid export name '{n}'"
-
-def toCName (n : Name) : CodegenM String := do
-  let env ← getEnv;
-  match getExportNameFor? env n with
-  | some (.str .anonymous s) => pure s
-  | some _                   => throwInvalidExportName n
-  | none                     => if n == `main then pure leanMainFn else pure n.mangle
-
 def emitFnDeclAux (decl : Decl) (cppBaseName : String) (isExternal : Bool) : CodegenM Unit := do
   let ps := decl.params
   let env ← getEnv
+  let ctx ← getCtx
   if ps.isEmpty then do
     let kind := if isClosedTermName env decl.name then
       GlobalKind.Internal
@@ -251,6 +332,8 @@ def emitFnDeclAux (decl : Decl) (cppBaseName : String) (isExternal : Bool) : Cod
     else GlobalKind.Exported
     let retTy ← toCType decl.resultType
     discard $ getOrCreateGlobal cppBaseName retTy (kind := kind)
+    let func ← ctx.newFunction none FunctionKind.Internal retTy ("_init_" ++ cppBaseName) #[] false
+    modify fun s => { s with declMap := s.declMap.insert decl.name (func, #[]) }
   else do
     let kind := if isClosedTermName env decl.name then
       FunctionKind.Internal
@@ -259,20 +342,20 @@ def emitFnDeclAux (decl : Decl) (cppBaseName : String) (isExternal : Bool) : Cod
     else FunctionKind.Exported
     let retTy ← toCType decl.resultType
     let ps := if isExternC env decl.name then ps.filter (fun p => !p.ty.isIrrelevant) else ps
-    let ctx ← getCtx
-    let params ←
+    let (names, params) ←
       if ps.size > closureMaxArgs && isBoxedName decl.name then do
-        pure #[← ctx.newParam none (← «lean_object*» >>= (·.getPointer)) "args"]
+        pure (#["args"], #[← ctx.newParam none (← «lean_object*» >>= (·.getPointer)) "args"])
       else do
-        let names := ps.map (fun p => s!"arg{p.x.idx}")
+        let names := ps.map (fun p => s!"{p.x}")
         let tys ← ps.mapM fun p => toCType p.ty
         let mut params := #[]
         for (ty, name) in tys.zip names do
           let param ← ctx.newParam none ty name
           params := params.push param
-        pure params
+        pure (names, params)
+    let namedParams := params.zip names
     let func ← ctx.newFunction none kind retTy cppBaseName params false
-    modify fun s => { s with declMap := s.declMap.insert decl.name func }
+    modify fun s => { s with declMap := s.declMap.insert decl.name (func, namedParams) }
 
 def emitExternDeclAux (decl : Decl) (cName : String) : CodegenM Unit := do
   let env ← getEnv
@@ -315,12 +398,6 @@ def emitAppRV (f : VarId) (args : Array Arg) : FuncM RValue := do
 def emitApp (z: LValue) (f : VarId) (args : Array Arg) : FuncM Unit := do
   mkAssignmentM z $ ← emitAppRV f args
 
-def getFuncDecl (n : FunId) : CodegenM Func := do
-  let f ← get >>= (pure $ ·.declMap.find? n)
-  match f with
-  | some f => pure f
-  | none   => throw s!"unknown function {n}"
-
 def emitMarkPersistent [AsRValue τ] (d : Decl) (val : τ) : FuncM Unit := do
   if d.resultType.isObj then
     mkEvalM (←call (← getLeanMarkPersistent) val)
@@ -350,14 +427,6 @@ def emitLit (z : LValue) (t : IRType) (v : LitVal) : FuncM Unit := do
 def emitIsShared (z : LValue) (x : VarId) : FuncM Unit := do
   let x ← getIndexVar x
   mkAssignmentM z $ ← call (← getLeanIsShared) x
-
-def dispatchUnbox (t : IRType) : CodegenM Func :=
-  match t with
-  | IRType.usize  => do getLeanUnboxAux "size_t" (← size_t) 
-  | IRType.uint32 => do getLeanUnboxAux "uint32_t" (← uint32_t)
-  | IRType.uint64 => do getLeanUnboxAux "uint64_t" (← uint64_t)
-  | IRType.float  => do getLeanUnboxAux "float" (← double)
-  | _             => getLeanUnbox
 
 def emitUnbox (z : LValue) (t : IRType) (x : VarId) : FuncM Unit := do
   let x ← getIndexVar x
@@ -777,6 +846,11 @@ partial def emitBlock (b : FnBody) : FuncM Unit :=
   | FnBody.unreachable         => emitUnreachable
 end
 
+def getLeanMain : CodegenM Func := do
+  match ← getDecl `main with
+  | Decl.fdecl f .. => getFuncDecl f
+  | _ => throw "Function declaration expected for 'main'"
+
 def emitMainFn : CodegenM Unit := do
   let env ← getEnv
   -- let main ← getDecl `main
@@ -842,3 +916,61 @@ def emitMainFn : CodegenM Unit := do
         mkReturnM (← constantOne int)
       )
   return
+
+def hasMainFn : CodegenM Bool := do
+  let env ← getEnv
+  let decls := getDecls env
+  return decls.any (fun d => d.name == `main)
+
+def emitMainFnIfNeeded : CodegenM Unit := do
+  if (← hasMainFn) then emitMainFn
+
+def emitDeclAux (d : Decl) : CodegenM Unit := do
+  let (func, params) ← getFuncDecl' d.name
+  let (_, jpMap) := mkVarJPMaps d
+  let entry ← func.newBlock "entry"
+  withFunctionView func entry params do
+    match d with
+    | .fdecl (xs := xs) (body := b) .. =>
+      let jpMap : HashMap JoinPointId (Block × Array LValue) ← jpMap.foldM (init := HashMap.empty) fun m k v => do
+        let name := s!"join_point_{k}"
+        let blk ← mkNewBlock name
+        let vars ← v.foldlM (init := #[]) fun m v => do
+          let t ← toCType v.ty
+          let x ← declareIndexVar t v.x
+          pure $ m.push x
+        pure $ m.insert k (blk, vars)
+      modify fun s => { s with jps := jpMap }
+      if xs.size > closureMaxArgs && isBoxedName d.name then
+        let args ← getParamM! "args"
+        let mut i := 0
+        xs.forM fun p => do
+          let var ← declareIndexVar (←«lean_object*») p.x
+          let value ← mkArrayAccess args $ ← mkConstant (← size_t) i.toUInt64
+          mkAssignmentM var value
+      else
+        xs.forM fun p => do
+          let p' ← getParamM! s!"{p.x}" >>= (·.asLValue)
+          modify fun s => { s with localVars := s.localVars.insert p.x p' }
+      emitFnBody b
+    | _ => pure ()
+
+def emitDecl (d : Decl) : CodegenM Unit := do
+  let d := d.normalizeIds; -- ensure we don't have gaps in the variable indices
+  try
+    emitDeclAux d
+  catch err =>
+    throw s!"{err}\ncompiling:\n{d}"
+
+def emitFns : CodegenM Unit := do
+  let env ← getEnv
+  let decls := getDecls env
+  decls.reverse.forM emitDecl
+
+def main : CodegenM Unit := do
+  populateRuntimeTable
+  emitFnDecls
+  emitFns
+  discard $ getModuleInitializationFunction
+  emitMainFnIfNeeded
+  

@@ -23,14 +23,13 @@ def leanMainFn := "_lean_main"
 structure GccContext where
   env          : Environment
   modName      : Name
-  jpMap        : JPParamsMap := {}
   mainFn       : FunId := default
   mainParams   : Array Param := #[]
   ctx          : Context
 
 structure State where
   funcMap      : HashMap String Func
-  declMap      : HashMap FunId Func
+  declMap      : HashMap FunId (Func × (Array (LeanGccJit.Core.Param × String)))
   constantMap  : HashMap String RValue
   globalMap    : HashMap String LValue
   structMap    : HashMap String (Struct × Array Field)
