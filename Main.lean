@@ -3,18 +3,19 @@ import «LeanGccBackend».Basic
 import «LeanGccBackend».Runtime
 import «LeanGccBackend».Codegen
 import «LeanGccJit»
+import Lean.Util.Path
 import Lean.Elab.Frontend
 open Lean.IR
 open LeanGccJit.Core
 open Lean.Elab.Frontend
 
-def src := "def main : IO Unit := IO.println \"Hello, world!\""
+def src := "def main : IO Unit := pure ()"
 
 def main : IO Unit := do 
-  let (env, x) ← Lean.Elab.runFrontend src {} "test.lean" `Init
+  Lean.initSearchPath  (← Lean.findSysroot)
+  let (env, _) ← Lean.Elab.runFrontend src {} "test.lean" `Init
   GccJit.emitGccJit env `Main "/tmp/test.o"
   
-  IO.println "123"
   -- let ctx ← Context.acquire
   -- let context : GccJit.GccContext := {
   --   env := {
