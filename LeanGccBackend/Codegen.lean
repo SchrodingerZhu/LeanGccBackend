@@ -975,8 +975,9 @@ def main : CodegenM Unit := do
   emitMainFnIfNeeded
 
 @[export lean_ir_emit_gccjit]
-def emitLLVM (env : Environment) (modName : Name) (filepath : String) : IO Unit := do
+def emitGccJit (env : Environment) (modName : Name) (filepath : String) : IO Unit := do
   let ctx ← Context.acquire
+  ctx.setIntOption IntOption.OptimizationLevel 3
   let ctx : GccContext := {env := env,  modName := modName, ctx := ctx}
   match ← main.run default |>.run ctx with
   | Except.error err => throw $ IO.userError err

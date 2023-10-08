@@ -11,7 +11,10 @@ open Lean.Elab.Frontend
 def src := "def main : IO Unit := IO.println \"Hello, world!\""
 
 def main : IO Unit := do 
-  let frontend ← Lean.Elab.runFrontend src {} "test.lean" `Main
+  let (env, x) ← Lean.Elab.runFrontend src {} "test.lean" `Init
+  GccJit.emitGccJit env `Main "/tmp/test.o"
+  
+  IO.println "123"
   -- let ctx ← Context.acquire
   -- let context : GccJit.GccContext := {
   --   env := {
