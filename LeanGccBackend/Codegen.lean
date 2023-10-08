@@ -332,8 +332,10 @@ def emitFnDeclAux (decl : Decl) (cppBaseName : String) (isExternal : Bool) : Cod
     else GlobalKind.Exported
     let retTy ← toCType decl.resultType
     discard $ getOrCreateGlobal cppBaseName retTy (kind := kind)
-    let func ← ctx.newFunction none FunctionKind.Internal retTy ("_init_" ++ cppBaseName) #[] false
-    modify fun s => { s with declMap := s.declMap.insert decl.name (func, #[]) }
+    let name := "_init_" ++ cppBaseName
+    let func ← ctx.newFunction none FunctionKind.Internal retTy name #[] false
+    modify fun s => { s with declMap := s.declMap.insert name (func, #[]) }
+    IO.println s!"inserted {name}"
   else do
     let kind := if isClosedTermName env decl.name then
       FunctionKind.Internal
@@ -483,17 +485,20 @@ def emitExternCall (f : FunId) (ps : Array Param) (extData : ExternAttrData) (ys
 
 def emitFullAppRV (f : FunId) (ys : Array Arg) (t : IRType) : FuncM RValue := do
   let decl ← getDecl f
-  match decl with
-  | Decl.extern _ ps _ extData => 
-    emitExternCall f ps extData ys t
-  | _ =>
-    let func ← getFuncDecl f
-    let args ← argsRValue ys
-    callArray func args
+  if ys.size == 0 then do
+    let gv ← getOrCreateGlobal (← toCName f) (← toCType decl.resultType)
+    gv.asRValue
+  else do
+    match decl with
+    | Decl.extern _ ps _ extData => 
+      emitExternCall f ps extData ys t
+    | _ =>
+      let func ← getFuncDecl f
+      let args ← argsRValue ys
+      callArray func args
 
 def emitFullApp (z : LValue) (f : FunId) (ys : Array Arg) (t : IRType) : FuncM Unit := do
   mkAssignmentM z $ ← emitFullAppRV f ys t
-
 
 def emitOffset (n : Nat) (offset : Nat) : FuncM RValue := do
   let unsigned ← unsigned
@@ -622,8 +627,8 @@ def tailCallCompatible (f : Func) (g : Func) : FuncM Bool := do
 
 def isTailCall (x : VarId) (v : Expr) (b : FnBody) : FuncM Bool := do
   match v, b with
-  | Expr.fap f _, FnBody.ret (Arg.var y) => 
-    if x == y then do
+  | Expr.fap f ys, FnBody.ret (Arg.var y) => 
+    if ys.size > 0 && x == y then do
       let current ← getFunction
       let f ← getFuncDecl f
       tailCallCompatible current f
@@ -926,7 +931,13 @@ def emitMainFnIfNeeded : CodegenM Unit := do
   if (← hasMainFn) then emitMainFn
 
 def emitDeclAux (d : Decl) : CodegenM Unit := do
-  let (func, params) ← getFuncDecl' d.name
+  let name ← if d.params.size > 0 then
+    toCName d.name
+  else
+    toCInitName d.name
+  IO.println s!"start emitting {name}"
+  let (func, params) ← getFuncDecl' name
+  IO.println s!"obtained {name}"
   let (_, jpMap) := mkVarJPMaps d
   let entry ← func.newBlock "entry"
   withFunctionView func entry params do
@@ -970,7 +981,12 @@ def emitFns : CodegenM Unit := do
 def main : CodegenM Unit := do
   populateRuntimeTable
   emitFnDecls
+  let s ← get
+  for i in s.declMap.toList do
+    IO.println s!"declared: {i.1}"
+  IO.println "start emitting functions"
   emitFns
+  IO.println "start emitting initialization"
   discard $ getModuleInitializationFunction
   emitMainFnIfNeeded
 

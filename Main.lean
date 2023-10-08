@@ -9,13 +9,14 @@ open Lean.IR
 open LeanGccJit.Core
 open Lean.Elab.Frontend
 
-def src := "def main : IO Unit := pure ()"
+def src := "def x : Unit := ()"
 
 def main : IO Unit := do 
   Lean.initSearchPath  (← Lean.findSysroot)
-  let (env, _) ← Lean.Elab.runFrontend src {} "test.lean" `Init
+  let (env, x) ← Lean.Elab.runFrontend src {} "test.lean" `Init
   GccJit.emitGccJit env `Main "/tmp/test.o"
   
+  IO.println "123"
   -- let ctx ← Context.acquire
   -- let context : GccJit.GccContext := {
   --   env := {
