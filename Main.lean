@@ -3,31 +3,35 @@ import «LeanGccBackend».Basic
 import «LeanGccBackend».Runtime
 import «LeanGccBackend».Codegen
 import «LeanGccJit»
-
+import Lean.Elab.Frontend
 open Lean.IR
 open LeanGccJit.Core
+open Lean.Elab.Frontend
+
+def src := "def main : IO Unit := IO.println \"Hello, world!\""
 
 def main : IO Unit := do 
-  let ctx ← Context.acquire
-  let context : GccJit.GccContext := {
-    env := {
-      const2ModIdx := default,
-      constants := default,
-      extensions := default,
-      extraConstNames := default,
-    }
-    modName := "test"
-    ctx
-  }
-  let state : GccJit.State := default 
-  ctx.setIntOption IntOption.OptimizationLevel 3
-  let ops := do
-    GccJit.populateRuntimeTable
-    GccJit.emitMainFn
+  let frontend ← Lean.Elab.runFrontend src {} "test.lean" `Main
+  -- let ctx ← Context.acquire
+  -- let context : GccJit.GccContext := {
+  --   env := {
+  --     const2ModIdx := default,
+  --     constants := default,
+  --     extensions := default,
+  --     extraConstNames := default,
+  --   }
+  --   modName := "test"
+  --   ctx
+  -- }
+  -- let state : GccJit.State := default 
+  -- ctx.setIntOption IntOption.OptimizationLevel 3
+  -- let ops := do
+  --   GccJit.populateRuntimeTable
+  --   GccJit.emitMainFn
   
-  let _ ← ops.run state context
-  -- let _ ← GccJit.getLeanDecRef.run state context
-  -- let _ ← GccJit.getLeanIncN.run state context
-  ctx.setBoolOption BoolOption.DumpInitialGimple true
-  ctx.compileToFile OutputKind.ObjectFile "/tmp/test.o"
-  ctx.release
+  -- let _ ← ops.run state context
+  -- -- let _ ← GccJit.getLeanDecRef.run state context
+  -- -- let _ ← GccJit.getLeanIncN.run state context
+  -- ctx.setBoolOption BoolOption.DumpInitialGimple true
+  -- ctx.compileToFile OutputKind.ObjectFile "/tmp/test.o"
+  -- ctx.release

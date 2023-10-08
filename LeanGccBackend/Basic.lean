@@ -29,11 +29,10 @@ structure GccContext where
 
 structure State where
   funcMap      : HashMap String Func
-  declMap      : HashMap FunId (Func × (Array (LeanGccJit.Core.Param × String)))
+  declMap      : HashMap FunId (Func × (Array (LeanGccJit.Core.Param × String))) 
   constantMap  : HashMap String RValue
   globalMap    : HashMap String LValue
   structMap    : HashMap String (Struct × Array Field)
-  glbCount     : HashMap String LValue
   deriving Inhabited
 
 abbrev Error := String

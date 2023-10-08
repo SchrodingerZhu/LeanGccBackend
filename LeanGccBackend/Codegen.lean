@@ -973,4 +973,15 @@ def main : CodegenM Unit := do
   emitFns
   discard $ getModuleInitializationFunction
   emitMainFnIfNeeded
+
+@[export lean_ir_emit_gccjit]
+def emitLLVM (env : Environment) (modName : Name) (filepath : String) : IO Unit := do
+  let ctx ← Context.acquire
+  let ctx : GccContext := {env := env,  modName := modName, ctx := ctx}
+  match ← main.run default |>.run ctx with
+  | Except.error err => throw $ IO.userError err
+  | Except.ok _ => pure ()
+  ctx.ctx.compileToFile OutputKind.ObjectFile filepath
+  ctx.ctx.release
+  
   
