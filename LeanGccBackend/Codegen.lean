@@ -827,9 +827,9 @@ partial def emitBlock (b : FnBody) : FuncM Unit :=
     emitJoinPoint j v
     emitBlock b
   | FnBody.vdecl x t v b => do
-    if ← isTailCall x v b then
-      emitTailCall t v
-    else
+    -- if ← isTailCall x v b then
+    --   emitTailCall t v
+    -- else
       emitVDecl x t v
       emitBlock b
   | FnBody.inc x n c p b => do
