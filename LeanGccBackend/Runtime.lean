@@ -687,11 +687,11 @@ def getLeanDealloc : CodegenM Func := do
 def getLeanCStrToNat : CodegenM Func := do
   importFunction "lean_cstr_to_nat" (← «lean_object*») #[((← «const char*»), "s")]
 
-def getLeanBigUsizeToNat : CodegenM Func := do
+def getLeanBigUSizeToNat : CodegenM Func := do
   importFunction "lean_big_usize_to_nat" (← «lean_object*») #[((← size_t), "o")]
 
-def getLeanBitUInt64ToNat : CodegenM Func := do
-  importFunction "lean_bit_uint64_to_nat" (← «lean_object*») #[((← uint64_t), "o")]
+def getLeanBigUInt64ToNat : CodegenM Func := do
+  importFunction "lean_big_uint64_to_nat" (← «lean_object*») #[((← uint64_t), "o")]
 
 def getLeanUsizeToNat : CodegenM Func := do
   mkFunction "lean_usize_to_nat" (← «lean_object*») #[((← size_t), "i")] fun blk params => do
@@ -702,9 +702,146 @@ def getLeanUsizeToNat : CodegenM Func := do
         mkReturn then_ (← call (← getLeanBox) i)
       )
       (fun else_ => do
-        mkReturn else_ (← call (← getLeanBigUsizeToNat) i)
+        mkReturn else_ (← call (← getLeanBigUSizeToNat) i)
       )
-    
+
+def isBothScalar [AsRValue τ₁] [AsRValue τ₂] (x: τ₁) (y : τ₂) : CodegenM RValue := do
+  let size_t ← size_t
+  let x ← x ::! size_t
+  let y ← y ::! size_t
+  (x &&& y) >>= (· &&& (1 : UInt64)) >>= (· =/= (0 : UInt64)) >>= likely
+
+def isBothObject [AsRValue τ₁] [AsRValue τ₂] (x: τ₁) (y : τ₂) : CodegenM RValue := do
+  let size_t ← size_t
+  let x ← x ::! size_t
+  let y ← y ::! size_t
+  (x ||| y) >>= (· &&& (1 : UInt64)) >>= (· === (0 : UInt64))
+
+def getLeanUnsignedToNat : CodegenM Func := do
+  let unsigned ← unsigned
+  mkFunction "lean_unsigned_to_nat" (← «lean_object*») #[((unsigned), "i")] fun blk params => do
+    let i ← getParam! params 0
+    mkReturn blk $ (← call (← getLeanUsizeToNat) (← i ::: (← size_t)))
+
+def getLeanUint64ToNat : CodegenM Func := do
+  let uint64_t ← uint64_t
+  mkFunction "lean_uint64_to_nat" (← «lean_object*») #[((uint64_t), "i")] fun blk params => do
+    let i ← getParam! params 0
+    let isSmall ← (i <== LEAN_MAX_SMALL_NAT.toUInt64) >>= likely
+    mkIfBranch blk isSmall
+      (fun then_ => do
+        mkReturn then_ (← call (← getLeanBox) i)
+      )
+      (fun else_ => do
+        mkReturn else_ (← call (← getLeanBigUInt64ToNat) i)
+      )
+
+def getLeanNatBigBinOp (name : String) (isCompare: Bool := False) : CodegenM Func := do
+  let retTy ← if isCompare then uint8_t else «lean_object*»
+  importFunction s!"lean_nat_big_{name}" retTy #[((← «lean_object*»), "a"), ((← «lean_object*»), "b")]
+
+def dispatchOverflowBuiltin (op: String) : CodegenM (Func × JitType) := do 
+  let ctx ← getCtx
+  let size_t ← size_t
+  let unsigned ← unsigned
+  if ← unsigned.isCompatibleWith size_t then
+    return (← getBuiltinFunc s!"__builtin_u{op}_overflow", unsigned)
+  else do 
+    let ulong ← ctx.getType TypeEnum.UnsignedLong
+    if ← ulong.isCompatibleWith size_t then
+      return (← getBuiltinFunc s!"__builtin_u{op}l_overflow", ulong)
+    else do
+      let ulonglong ← ctx.getType TypeEnum.UnsignedLongLong
+      if ← ulonglong.isCompatibleWith size_t then
+        return (← getBuiltinFunc s!"__builtin_u{op}ll_overflow", ulonglong)
+      else
+        throw "Unsupported size_t type"
+
+def overflowCheck [AsRValue τ₁]  [AsRValue τ₂] (blk: Block) (name : String) (x : τ₁) (op: String) (y : τ₂) : CodegenM (LValue × RValue) := do
+  let (func, ty) ← dispatchOverflowBuiltin op
+  let x ← x ::: ty
+  let y ← y ::: ty
+  let result ← mkLocalVar blk ty name
+  let address ← result.getAddress none
+  let overflow ← call func (x, y, address)
+  pure (result, overflow)
+      
+def getLeanNatBinOp 
+  (name : String) 
+  (fastpath: Block → LeanGccJit.Core.Param → LeanGccJit.Core.Param → CodegenM Unit) 
+  (isCompare: Bool := False) : CodegenM Func := do
+  let retTy ← if isCompare then uint8_t else «lean_object*»
+  mkFunction s!"lean_nat_{name}" retTy #[((← «lean_object*»), "a"), ((← «lean_object*»), "b")] fun blk params => do
+    let a ← getParam! params 0
+    let b ← getParam! params 1
+    let isBothScalar ← isBothScalar a b
+    mkIfBranch blk isBothScalar
+      (fun then_ => do
+        fastpath then_ a b
+      )
+      (fun else_ => do
+        mkReturn else_ (← call (← getLeanNatBigBinOp name isCompare) (a, b))
+      )
+
+def getLeanNatAdd : CodegenM Func := 
+  getLeanNatBinOp "add" fun blk a b => do
+    let size_t ← size_t
+    let one ← constantOne size_t
+    let a ← a ::! size_t
+    let b ← (←b ::! size_t) &&& (← ·~· one)
+    let (result, overflow) ← overflowCheck blk "result" a "add" b
+    let overflow ← unlikely overflow
+    mkIfBranch blk overflow
+      (fun then_ => do
+        let topbit ← one <<< (System.Platform.numBits - 1).toUInt64
+        let result ← (←result >>> (1 : UInt64)) ||| topbit
+        mkReturn then_ $ ← call (← getLeanBigUSizeToNat) (← result ::: size_t)
+      )
+      (fun else_ => do
+        mkReturn else_ $ ← result ::! (←«lean_object*»)
+      )
+
+def getLeanNatSub : CodegenM Func := 
+  getLeanNatBinOp "sub" fun blk a b => do
+    let a ← a ::! (← size_t)
+    let b ← b ::! (← size_t)
+    let (result, overflow) ← overflowCheck blk "result" a "sub" b
+    let overflow ← unlikely overflow
+    mkIfBranch blk overflow
+      (fun then_ => do 
+        let unit ← call (← getLeanBox) (← constantZero (← size_t))
+        mkReturn then_ unit
+      )
+      (fun else_ => do
+        let res ← result ||| (← constantOne (← size_t))
+        mkReturn else_ (← res ::! (←«lean_object*»))
+      )
+
+def getLeanNatEq : CodegenM Func := do
+  mkFunction "lean_nat_eq" (← uint8_t) #[((← «lean_object*»), "a"), ((← «lean_object*»), "b")] fun blk params => do
+    let a ← getParam! params 0
+    let b ← getParam! params 1
+    mkIfBranch blk (← a === b)
+      (fun then_ => do
+        mkReturn then_ (← constantOne (← uint8_t))
+      )
+      (fun else_ => do
+        let isBothObject ← isBothObject a b
+        mkIfBranch else_ isBothObject
+          (fun then_ => do
+            mkReturn then_ (← call (← getLeanNatBigBinOp "eq" true) (a, b))
+          )
+          (fun else_ => do
+            mkReturn else_ (← constantZero (← uint8_t))
+          )
+      )
+
+def getLeanNatDecEq : CodegenM Func := do
+  mkFunction "lean_nat_dec_eq"  (← uint8_t) #[((← «lean_object*»), "a"), ((← «lean_object*»), "b")] fun blk params => do
+    let a ← getParam! params 0
+    let b ← getParam! params 1
+    mkReturn blk $ ← call (← getLeanNatEq) (a, b)
+
 def populateRuntimeTable : CodegenM Unit := do
     discard getLeanIsScalar
     discard getLeanBox
@@ -784,6 +921,21 @@ def populateRuntimeTable : CodegenM Unit := do
       discard $ getLeanApply i
     discard getLeanApplyM
     discard getLeanCStrToNat
-    discard getLeanBigUsizeToNat
-    discard getLeanBitUInt64ToNat
+    discard getLeanBigUSizeToNat
+    discard getLeanBigUInt64ToNat
     discard getLeanUsizeToNat
+    discard getLeanUnsignedToNat
+    discard getLeanUint64ToNat
+    discard $ getLeanNatBigBinOp "add"
+    discard $ getLeanNatBigBinOp "sub"
+    discard $ getLeanNatBigBinOp "mul"
+    discard $ getLeanNatBigBinOp "div"
+    discard $ getLeanNatBigBinOp "mod"
+    discard $ getLeanNatBigBinOp "eq" true
+    discard $ getLeanNatBigBinOp "ne" true
+    discard $ getLeanNatBigBinOp "lt" true
+    discard $ getLeanNatBigBinOp "le" true
+    discard $ getLeanNatAdd
+    discard $ getLeanNatSub
+    discard $ getLeanNatEq
+    discard $ getLeanNatDecEq

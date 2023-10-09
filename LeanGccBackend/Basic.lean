@@ -312,9 +312,9 @@ def likely [AsRValue τ] (x : τ) : CodegenM RValue := do
 
 def unlikely [AsRValue τ] (x : τ) : CodegenM RValue := do
   let long ← «long»
-  let one ← constantOne long
+  let zero ← constantZero long
   let x ← cast x long 
-  let res ← call (← getBuiltinFunc "__builtin_expect") (x, one)
+  let res ← call (← getBuiltinFunc "__builtin_expect") (x, zero)
   cast res (← bool)
 
 def mkFunction 

@@ -1004,6 +1004,7 @@ def main : CodegenM Unit := do
 def emitGccJit (env : Environment) (modName : Name) (filepath : String) : IO Unit := do
   let ctx ← Context.acquire
   ctx.setIntOption IntOption.OptimizationLevel 3
+  ctx.setBoolOption BoolOption.DumpInitialGimple true
   let ctx : GccContext := {env := env,  modName := modName, ctx := ctx}
   match ← main.run default |>.run ctx with
   | Except.error err => throw $ IO.userError err
