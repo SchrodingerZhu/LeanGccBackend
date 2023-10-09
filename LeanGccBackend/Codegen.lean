@@ -89,6 +89,7 @@ structure FunctionView where
   localVars : HashMap VarId LValue
   entry     : Block
   jps       : HashMap JoinPointId (Block × Array LValue)
+  decl      : Option Decl
   
 abbrev FuncM := StateT FunctionView CodegenM 
 
@@ -98,11 +99,11 @@ def getParamM! (n : String) : FuncM LeanGccJit.Core.Param := do
   | _ => throw s!"unknown parameter {n}"
 
 def withFunctionView 
-  (func: Func) (entry: Block) (params: Array (LeanGccJit.Core.Param × String)) (body: FuncM α) : CodegenM α := do 
+  (func: Func) (entry: Block) (params: Array (LeanGccJit.Core.Param × String)) (body: FuncM α) (decl: Option Decl := none) : CodegenM α := do 
   let mut params' := HashMap.empty
   for (p, name) in params do
     params' := params'.insert name p
-  body.run' ⟨func, params', entry, 0, default, entry, default⟩
+  body.run' ⟨func, params', entry, 0, default, entry, default, decl⟩
 
 def moveTo (blk: Block) : FuncM Unit := do
   modify fun view => { view with cursor := blk }
@@ -640,22 +641,16 @@ def tailCallCompatible (f : Func) (g : Func) : FuncM Bool := do
     return false
 
 def isTailCall (x : VarId) (v : Expr) (b : FnBody) : FuncM Bool := do
-  match v, b with
-  | Expr.fap f ys, FnBody.ret (Arg.var y) => 
-    if ys.size > 0 && x == y then do
+  let state ← get
+  match state.decl, v, b with
+  | some d, Expr.fap f _, FnBody.ret (Arg.var y) => 
+    if d.name == f && x == y then do
       let current ← getFunction
       let f ← getFuncDecl $ ← toCName f
       tailCallCompatible current f
     else 
       return false
-  | Expr.ap _ a, FnBody.ret (Arg.var y) => 
-    if x == y && a.size <= closureMaxArgs then do
-      let current ← getFunction
-      let f ← getLeanApply a.size
-      tailCallCompatible current f
-    else 
-      return false
-  | _, _ => pure false
+  | _, _, _ => pure false
 
 def emitTailCall (t: IRType) (v : Expr) : FuncM Unit := do
   let rv ← match v with
@@ -827,9 +822,9 @@ partial def emitBlock (b : FnBody) : FuncM Unit :=
     emitJoinPoint j v
     emitBlock b
   | FnBody.vdecl x t v b => do
-    -- if ← isTailCall x v b then
-    --   emitTailCall t v
-    -- else
+    if ← isTailCall x v b then
+      emitTailCall t v
+    else
       emitVDecl x t v
       emitBlock b
   | FnBody.inc x n c p b => do
@@ -957,7 +952,7 @@ def emitDeclAux (d : Decl) : CodegenM Unit := do
   let (func, params) ← getFuncDecl' name
   let (_, jpMap) := mkVarJPMaps d
   let entry ← func.newBlock "entry"
-  withFunctionView func entry params do
+  withFunctionView func entry params (decl := some d) do
     match d with
     | .fdecl (xs := xs) (body := b) .. =>
       let jpMap : HashMap JoinPointId (Block × Array LValue) ← jpMap.foldM (init := HashMap.empty) fun m k v => do
