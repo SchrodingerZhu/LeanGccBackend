@@ -9,11 +9,11 @@ open Lean.IR
 open LeanGccJit.Core
 open Lean.Elab.Frontend
 
-def src := "def x : Nat := 100000000000000000000000000000000000000000000000"
+def src := "def main : IO Unit := IO.println s!\"{100000000000000000000000000000000000000000000000}\""
 
 def main : IO Unit := do 
   Lean.initSearchPath  (← Lean.findSysroot)
-  let (env, x) ← Lean.Elab.runFrontend src {} "test.lean" `Init
+  let (env, x) ← Lean.Elab.runFrontend src {} "test.lean" `Main
   GccJit.emitGccJit env `Main "/tmp/test.o"
   -- let ctx ← Context.acquire
   -- let context : GccJit.GccContext := {

@@ -223,12 +223,10 @@ def toCType : IRType → CodegenM JitType
   | IRType.struct _ _ => throw "IRType.struct cannot be converted to JitType yet"
   | IRType.union _ _  => throw "IRType.union cannot be converted to JitType yet"
 
-def emitDeclInit (d : Decl) (res: LValue) (errBlk: Block) : FuncM Unit := do
+def emitDeclInit (d : Decl) (res: LValue) (errBlk: Block) (w : RValue) : FuncM Unit := do
   let env ← getEnv
   let n := d.name
-  let world ← mkLocalVarM (← «lean_object*»)
   let builtin ← getParamM! "builtin" >>= (·.asRValue)
-  mkAssignmentM world $ ← call (← getLeanIOMkWorld) ()
   if isIOUnitInitFn env n then do
     let f ← getFuncDecl $ ← toCName n
     let mut nextBlk := none
@@ -238,7 +236,7 @@ def emitDeclInit (d : Decl) (res: LValue) (errBlk: Block) : FuncM Unit := do
       currentBlock >>= (·.endWithConditional none builtin blkBuiltin blkNotBuiltin)
       nextBlk := some blkNotBuiltin
       moveTo blkBuiltin
-    mkAssignmentM res $ ← call f world
+    mkAssignmentM res $ ← call f w
     let isErr ← call (← getLeanIOResultIsError) res
     let next ← match nextBlk with
     | some blk => pure blk
@@ -258,7 +256,7 @@ def emitDeclInit (d : Decl) (res: LValue) (errBlk: Block) : FuncM Unit := do
         nextBlk := some blkNotBuiltin
         moveTo blkBuiltin
       let f ← getFuncDecl $ ← toCName initFn
-      mkAssignmentM res $ ← call f world
+      mkAssignmentM res $ ← call f w
       let isErr ← call (← getLeanIOResultIsError) res
       let next ← match nextBlk with
       | some blk => pure blk
@@ -302,8 +300,9 @@ def getModuleInitializationFunction : CodegenM Func := do
         if !importedInits.isEmpty || !decls.isEmpty then do
           let errBlk ← mkNewBlock "err"
           errBlk.endWithReturn none $ ← res.asRValue
+          let w ← getParamM! "w"
           for i in importedInits do
-            mkAssignmentM res (←call i (← getParamM! "builtin", ← getParamM! "w"))
+            mkAssignmentM res (←call i (← getParamM! "builtin", w))
             let isErr ← call (← getLeanIOResultIsError) res
             mkIfBranchM isErr
               (do 
@@ -312,7 +311,7 @@ def getModuleInitializationFunction : CodegenM Func := do
               (do 
                 mkEvalM (←call (← getLeanDecRef) res)
               )
-          decls.reverse.forM (emitDeclInit · res errBlk)
+          decls.reverse.forM (emitDeclInit · res errBlk (← w.asRValue))
         goto epilogue 
       )
     moveTo epilogue
@@ -356,7 +355,7 @@ def emitFnDeclAux (decl : Decl) (cppBaseName : String) (isExternal : Bool) : Cod
         pure (names, params)
     let namedParams := params.zip names
     let func ← ctx.newFunction none kind retTy cppBaseName params false
-    modify fun s => { s with declMap := s.declMap.insert decl.name (func, namedParams) }
+    modify fun s => { s with declMap := s.declMap.insert cppBaseName (func, namedParams) }
 
 def emitExternDeclAux (decl : Decl) (cName : String) : CodegenM Unit := do
   let env ← getEnv
@@ -465,7 +464,7 @@ def emitBox (z : LValue) (x : VarId) (t : IRType) : FuncM Unit := do
 
 def emitPartialApp (z : LValue) (f : FunId) (args : Array Arg) : FuncM Unit := do
   let decl ← getDecl f
-  let f ← getFuncDecl f
+  let f ← getFuncDecl (← toCName f)
   let address ← f.getAddress none
   let arity ← mkConstant  (←unsigned) decl.params.size.toUInt64;
   let fixed ← mkConstant  (←unsigned) args.size.toUInt64;
@@ -508,7 +507,7 @@ def emitFullAppRV (f : FunId) (ys : Array Arg) (t : IRType) : FuncM RValue := do
     | Decl.extern _ ps _ extData => 
       emitExternCall f ps extData ys t
     | _ =>
-      let func ← getFuncDecl f
+      let func ← getFuncDecl (← toCName f)
       let args ← argsRValue ys
       callArray func args
 
@@ -645,7 +644,7 @@ def isTailCall (x : VarId) (v : Expr) (b : FnBody) : FuncM Bool := do
   | Expr.fap f ys, FnBody.ret (Arg.var y) => 
     if ys.size > 0 && x == y then do
       let current ← getFunction
-      let f ← getFuncDecl f
+      let f ← getFuncDecl $ ← toCName f
       tailCallCompatible current f
     else 
       return false
@@ -868,15 +867,20 @@ end
 
 def getLeanMain : CodegenM Func := do
   match ← getDecl `main with
-  | Decl.fdecl f .. => getFuncDecl f
+  | Decl.fdecl f .. => getFuncDecl (← toCName f)
   | _ => throw "Function declaration expected for 'main'"
 
 def emitMainFn : CodegenM Unit := do
   let env ← getEnv
-  -- let main ← getDecl `main
-  -- let params ← match main with
-  --  | .fdecl (xs := xs) .. => pure xs
-  --  | _ =>  throw "Function declaration expected for 'main'"
+  let main ← getDecl `main
+  discard $ match main with
+   | .fdecl (xs := xs) .. =>
+      if xs.size != 1 && xs.size != 2 then
+        throw "invalid main function"
+      else do
+        pure ()
+   | _ => 
+      throw "Function declaration expected for 'main'"
   let int ← int
   let bool ← bool
   let argv ← «const char*» >>= (·.getPointer)
