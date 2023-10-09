@@ -9,11 +9,14 @@ open Lean.IR
 open LeanGccJit.Core
 open Lean.Elab.Frontend
 
-def src := "def main (args : List String) : IO Unit := 
-  if args.isEmpty then
-    IO.println \"Hello, world!\"
-  else
-    IO.println s!\"{100000000000000000000000000000000000000000000000}\""
+def src := "
+def fib:  Nat -> Nat
+  | Nat.succ m@(Nat.succ n) => fib n + fib m
+  | _ => 1
+def main : List String -> IO Unit
+  | List.nil => IO.println \"empty input\"
+  | List.cons h _ => IO.println s!\"result: {fib h.toNat!}\"
+"
 
 def main : IO Unit := do 
   Lean.initSearchPath  (← Lean.findSysroot)

@@ -420,9 +420,8 @@ def emitCStringLit (s : String) : FuncM RValue := do
   (← arrayToPtr gv) ::: (←«const char*»)
 
 def emitNumLit (t : IRType) (n : Nat) : FuncM RValue := do
-  let limit : Nat := (((1 <<< (System.Platform.numBits - 2)) - 1) <<< 1) + 1
   if t.isObj then
-    if n <= limit then
+    if n <= LEAN_MAX_SMALL_NAT then
       call (← getLeanBox) $ ← mkConstant (← size_t) n.toUInt64
     else
       let cstr ← emitCStringLit $ toString n
@@ -981,6 +980,7 @@ def emitDeclAux (d : Decl) : CodegenM Unit := do
 def emitDecl (d : Decl) : CodegenM Unit := do
   let d := d.normalizeIds; -- ensure we don't have gaps in the variable indices
   try
+    IO.println s!"emitting\n{d}"
     emitDeclAux d
   catch err =>
     throw s!"{err}\ncompiling:\n{d}"
@@ -1004,7 +1004,6 @@ def main : CodegenM Unit := do
 def emitGccJit (env : Environment) (modName : Name) (filepath : String) : IO Unit := do
   let ctx ← Context.acquire
   ctx.setIntOption IntOption.OptimizationLevel 3
-  ctx.setBoolOption BoolOption.DumpInitialGimple true
   let ctx : GccContext := {env := env,  modName := modName, ctx := ctx}
   match ← main.run default |>.run ctx with
   | Except.error err => throw $ IO.userError err

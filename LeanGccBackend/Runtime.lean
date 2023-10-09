@@ -5,6 +5,8 @@ open LeanGccJit.Core
 namespace Lean.IR
 namespace GccJit
 
+def LEAN_MAX_SMALL_NAT : Nat := (((1 <<< (System.Platform.numBits - 2)) - 1) <<< 1) + 1
+
 def getLeanObject : CodegenM (Struct × Array Field) := do
   let unsigned ← unsigned
   mkStruct "lean_object" #[
@@ -512,7 +514,7 @@ def getLeanCtorGet : CodegenM Func := do
 
 def getLeanApply (arity: Nat) := do
     let objPtr ← «lean_object*»
-    let args := (List.range arity).map fun i => (objPtr, s!"a{i}")
+    let args := (List.range $ arity + 1).map fun i => (objPtr, s!"a{i}")
     importFunction s!"lean_apply_{arity}" (← «lean_object*») (args.toArray)
 
 def getLeanIOResultGetValue : CodegenM Func := do
@@ -685,6 +687,24 @@ def getLeanDealloc : CodegenM Func := do
 def getLeanCStrToNat : CodegenM Func := do
   importFunction "lean_cstr_to_nat" (← «lean_object*») #[((← «const char*»), "s")]
 
+def getLeanBigUsizeToNat : CodegenM Func := do
+  importFunction "lean_big_usize_to_nat" (← «lean_object*») #[((← size_t), "o")]
+
+def getLeanBitUInt64ToNat : CodegenM Func := do
+  importFunction "lean_bit_uint64_to_nat" (← «lean_object*») #[((← uint64_t), "o")]
+
+def getLeanUsizeToNat : CodegenM Func := do
+  mkFunction "lean_usize_to_nat" (← «lean_object*») #[((← size_t), "i")] fun blk params => do
+    let i ← getParam! params 0
+    let isSmall ← (i <== LEAN_MAX_SMALL_NAT.toUInt64) >>= likely
+    mkIfBranch blk isSmall
+      (fun then_ => do
+        mkReturn then_ (← call (← getLeanBox) i)
+      )
+      (fun else_ => do
+        mkReturn else_ (← call (← getLeanBigUsizeToNat) i)
+      )
+    
 def populateRuntimeTable : CodegenM Unit := do
     discard getLeanIsScalar
     discard getLeanBox
@@ -764,3 +784,6 @@ def populateRuntimeTable : CodegenM Unit := do
       discard $ getLeanApply i
     discard getLeanApplyM
     discard getLeanCStrToNat
+    discard getLeanBigUsizeToNat
+    discard getLeanBitUInt64ToNat
+    discard getLeanUsizeToNat
