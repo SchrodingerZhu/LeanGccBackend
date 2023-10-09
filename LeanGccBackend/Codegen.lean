@@ -335,7 +335,6 @@ def emitFnDeclAux (decl : Decl) (cppBaseName : String) (isExternal : Bool) : Cod
     let name := "_init_" ++ cppBaseName
     let func ← ctx.newFunction none FunctionKind.Internal retTy name #[] false
     modify fun s => { s with declMap := s.declMap.insert name (func, #[]) }
-    IO.println s!"inserted {name}"
   else do
     let kind := if isClosedTermName env decl.name then
       FunctionKind.Internal
@@ -410,21 +409,37 @@ def getTag [AsRValue τ] (xType : IRType) (val : τ) : FuncM RValue := do
   else
     asRValue val
 
+def emitCStringLit (s : String) : FuncM RValue := do
+  let char ← char
+  let ctx ← getCtx
+  let length := s.utf8ByteSize
+  let arr ← ctx.newArrayType none char length
+  let (gv, initialized) ← getGlobalForLiteral s arr 
+  if !initialized then do
+    discard $ Global.setInitializer gv s.toUTF8
+  (← arrayToPtr gv) ::: (←«const char*»)
+
+def emitNumLit (t : IRType) (n : Nat) : FuncM RValue := do
+  let limit : Nat := (((1 <<< (System.Platform.numBits - 2)) - 1) <<< 1) + 1
+  if t.isObj then
+    if n <= limit then
+      call (← getLeanBox) $ ← mkConstant (← size_t) n.toUInt64
+    else
+      let cstr ← emitCStringLit $ toString n
+      call (← getLeanCStrToNat) cstr
+  else
+    mkConstant (← toCType t) n.toUInt64
+
 def emitLit (z : LValue) (t : IRType) (v : LitVal) : FuncM Unit := do
   mkAssignmentM z $ ← match v with
-  | LitVal.num n => do
-    mkConstant (← toCType t) n.toUInt64
+  | LitVal.num n => emitNumLit t n
   | LitVal.str s => do
-    let char ← char
-    let ctx ← getCtx
     let length := s.utf8ByteSize
-    let arr ← ctx.newArrayType none char length
-    let (gv, initialized) ← getGlobalForLiteral s arr 
-    if !initialized then do
-      discard $ Global.setInitializer gv s.toUTF8
-    let cstr ← arrayToPtr gv
+    let cstr ← emitCStringLit s
     let length ← mkConstant (←size_t) length.toUInt64
     call (← getLeanMkStringFromBytes) (cstr, length)
+    
+    
 
 def emitIsShared (z : LValue) (x : VarId) : FuncM Unit := do
   let x ← getIndexVar x
@@ -935,9 +950,7 @@ def emitDeclAux (d : Decl) : CodegenM Unit := do
     toCName d.name
   else
     toCInitName d.name
-  IO.println s!"start emitting {name}"
   let (func, params) ← getFuncDecl' name
-  IO.println s!"obtained {name}"
   let (_, jpMap) := mkVarJPMaps d
   let entry ← func.newBlock "entry"
   withFunctionView func entry params do
@@ -980,10 +993,8 @@ def emitFns : CodegenM Unit := do
 
 def main : CodegenM Unit := do
   populateRuntimeTable
+  IO.println "start emitting functions declarations"
   emitFnDecls
-  let s ← get
-  for i in s.declMap.toList do
-    IO.println s!"declared: {i.1}"
   IO.println "start emitting functions"
   emitFns
   IO.println "start emitting initialization"
@@ -994,6 +1005,7 @@ def main : CodegenM Unit := do
 def emitGccJit (env : Environment) (modName : Name) (filepath : String) : IO Unit := do
   let ctx ← Context.acquire
   ctx.setIntOption IntOption.OptimizationLevel 3
+  ctx.setBoolOption BoolOption.DumpInitialGimple true
   let ctx : GccContext := {env := env,  modName := modName, ctx := ctx}
   match ← main.run default |>.run ctx with
   | Except.error err => throw $ IO.userError err

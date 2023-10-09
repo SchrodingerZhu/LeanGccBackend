@@ -72,7 +72,8 @@ def getGlobalForLiteral (str: String) (ty: JitType) : CodegenM (LValue × Bool) 
   | some v => pure (v, true)
   | none => do
     let ctx ← getCtx
-    let v ← ctx.newGlobal none GlobalKind.Internal ty str
+    let counter ← get >>= (pure ·.globalMap.size)
+    let v ← ctx.newGlobal none GlobalKind.Internal ty s!"_literal_{counter}"
     modify fun s => { s with globalMap := s.globalMap.insert str v }
     pure (v, false)
   

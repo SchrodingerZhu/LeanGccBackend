@@ -682,6 +682,9 @@ def getLeanCtorRelease : CodegenM Func := do
 def getLeanDealloc : CodegenM Func := do
   importFunction "lean_dealloc" (← void) #[((← «lean_object*»), "o")]
 
+def getLeanCStrToNat : CodegenM Func := do
+  importFunction "lean_cstr_to_nat" (← «lean_object*») #[((← «const char*»), "s")]
+
 def populateRuntimeTable : CodegenM Unit := do
     discard getLeanIsScalar
     discard getLeanBox
@@ -760,3 +763,4 @@ def populateRuntimeTable : CodegenM Unit := do
     (16 : Nat).forM fun i => do
       discard $ getLeanApply i
     discard getLeanApplyM
+    discard getLeanCStrToNat
