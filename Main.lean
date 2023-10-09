@@ -9,7 +9,11 @@ open Lean.IR
 open LeanGccJit.Core
 open Lean.Elab.Frontend
 
-def src := "def main (args : List String) : IO Unit := IO.println s!\"{100000000000000000000000000000000000000000000000}\""
+def src := "def main (args : List String) : IO Unit := 
+  if args.isEmpty then
+    IO.println \"Hello, world!\"
+  else
+    IO.println s!\"{100000000000000000000000000000000000000000000000}\""
 
 def main : IO Unit := do 
   Lean.initSearchPath  (← Lean.findSysroot)

@@ -407,7 +407,7 @@ def getTag [AsRValue τ] (xType : IRType) (val : τ) : FuncM RValue := do
   if xType.isObj then do
     call (← getLeanObjTag) val
   else
-    asRValue val
+    val ::: (←unsigned)
 
 def emitCStringLit (s : String) : FuncM RValue := do
   let char ← char
