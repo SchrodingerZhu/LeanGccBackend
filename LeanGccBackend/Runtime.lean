@@ -803,18 +803,19 @@ def getLeanNatAdd : CodegenM Func :=
 
 def getLeanNatSub : CodegenM Func := 
   getLeanNatBinOp "sub" fun blk a b => do
-    let a ← a ::! (← size_t)
-    let b ← b ::! (← size_t)
+    let size_t ← size_t
+    let one ← constantOne size_t
+    let a ← a ::! size_t
+    let b ← (←b ::! size_t) &&& (← ·~· one)
     let (result, overflow) ← overflowCheck blk "result" a "sub" b
     let overflow ← unlikely overflow
     mkIfBranch blk overflow
       (fun then_ => do 
-        let unit ← call (← getLeanBox) (← constantZero (← size_t))
+        let unit ← call (← getLeanBox) (← constantZero size_t)
         mkReturn then_ unit
       )
       (fun else_ => do
-        let res ← result ||| (← constantOne (← size_t))
-        mkReturn else_ (← res ::! (←«lean_object*»))
+        mkReturn else_ (← result ::! (←«lean_object*»))
       )
 
 def getLeanNatEq : CodegenM Func := do
