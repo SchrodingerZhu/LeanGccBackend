@@ -1,3 +1,7 @@
 /build
 /lakefile.olean
 /lake-packages/*
+a.out
+perf.data
+*.profraw
+.vscode
