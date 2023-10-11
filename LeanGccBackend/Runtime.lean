@@ -837,6 +837,25 @@ def getLeanNatEq : CodegenM Func := do
           )
       )
 
+def getLeanNatLAnd : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  mkFunction "lean_nat_land" obj_ptr #[(obj_ptr, "a"), (obj_ptr, "b")] fun blk params => do
+    let size_t ← size_t
+    let a ← getParam! params 0
+    let b ← getParam! params 1
+    let a' ← a ::! size_t
+    let b' ← b ::! size_t
+    let res ← mkLocalVar blk size_t "res"
+    mkAssignment blk res $ ← a' &&& b'
+    let isScalar ← likely $ ← (← res &&& (1 : UInt64)) =/= (0 : UInt64)
+    mkIfBranch blk isScalar
+      (fun then_ => do
+        mkReturn then_ $ ← res ::! obj_ptr
+      )
+      (fun else_ => do
+        mkReturn else_ $ ← call (← getLeanNatBigBinOp "land") (a, b)
+      )
+
 def getLeanNatDecEq : CodegenM Func := do
   mkFunction "lean_nat_dec_eq"  (← uint8_t) #[((← «lean_object*»), "a"), ((← «lean_object*»), "b")] fun blk params => do
     let a ← getParam! params 0
@@ -932,6 +951,7 @@ def populateRuntimeTable : CodegenM Unit := do
     discard $ getLeanNatBigBinOp "mul"
     discard $ getLeanNatBigBinOp "div"
     discard $ getLeanNatBigBinOp "mod"
+    discard $ getLeanNatBigBinOp "land"
     discard $ getLeanNatBigBinOp "eq" true
     discard $ getLeanNatBigBinOp "ne" true
     discard $ getLeanNatBigBinOp "lt" true
@@ -940,3 +960,4 @@ def populateRuntimeTable : CodegenM Unit := do
     discard $ getLeanNatSub
     discard $ getLeanNatEq
     discard $ getLeanNatDecEq
+    discard $ getLeanNatLAnd
