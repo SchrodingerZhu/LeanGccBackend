@@ -740,6 +740,24 @@ def getLeanNatBigBinOp (name : String) (isCompare: Bool := False) : CodegenM Fun
   let retTy ← if isCompare then uint8_t else «lean_object*»
   importFunction s!"lean_nat_big_{name}" retTy #[((← «lean_object*»), "a"), ((← «lean_object*»), "b")]
 
+def dispatchSignedOverflow (op: String) : CodegenM (Func × JitType) := do
+  let ctx ← getCtx
+  let size_t ← size_t
+  let size_t_size ← size_t.getSize
+  let int ← int
+  if (← int.getSize) == size_t_size then
+    return (← getBuiltinFunc s!"__builtin_s{op}_overflow", int)
+  else do 
+    let long ← ctx.getType TypeEnum.Long
+    if (← long.getSize) == size_t_size then
+      return (← getBuiltinFunc s!"__builtin_s{op}l_overflow", long)
+    else do
+      let longlong ← ctx.getType TypeEnum.LongLong
+      if (← longlong.getSize) == size_t_size then
+        return (← getBuiltinFunc s!"__builtin_s{op}ll_overflow", longlong)
+      else
+        throw "Unsupported size_t type"
+
 def dispatchOverflowBuiltin (op: String) : CodegenM (Func × JitType) := do 
   let ctx ← getCtx
   let size_t ← size_t
@@ -757,8 +775,8 @@ def dispatchOverflowBuiltin (op: String) : CodegenM (Func × JitType) := do
       else
         throw "Unsupported size_t type"
 
-def overflowCheck [AsRValue τ₁]  [AsRValue τ₂] (blk: Block) (name : String) (x : τ₁) (op: String) (y : τ₂) : CodegenM (LValue × RValue) := do
-  let (func, ty) ← dispatchOverflowBuiltin op
+def overflowCheck [AsRValue τ₁]  [AsRValue τ₂] (dispatch : String → CodegenM (Func × JitType)) (blk: Block) (name : String) (x : τ₁) (op: String) (y : τ₂) : CodegenM (LValue × RValue) := do
+  let (func, ty) ← dispatch op
   let x ← x ::: ty
   let y ← y ::: ty
   let result ← mkLocalVar blk ty name
@@ -789,7 +807,7 @@ def getLeanNatAdd : CodegenM Func :=
     let one ← constantOne size_t
     let a ← a ::! size_t
     let b ← (←b ::! size_t) &&& (← ·~· one)
-    let (result, overflow) ← overflowCheck blk "result" a "add" b
+    let (result, overflow) ← overflowCheck dispatchOverflowBuiltin blk "result" a "add" b
     let overflow ← unlikely overflow
     mkIfBranch blk overflow
       (fun then_ => do
@@ -807,7 +825,7 @@ def getLeanNatSub : CodegenM Func :=
     let one ← constantOne size_t
     let a ← a ::! size_t
     let b ← (←b ::! size_t) &&& (← ·~· one)
-    let (result, overflow) ← overflowCheck blk "result" a "sub" b
+    let (result, overflow) ← overflowCheck dispatchOverflowBuiltin blk "result" a "sub" b
     let overflow ← unlikely overflow
     mkIfBranch blk overflow
       (fun then_ => do 
@@ -861,6 +879,46 @@ def getLeanNatDecEq : CodegenM Func := do
     let a ← getParam! params 0
     let b ← getParam! params 1
     mkReturn blk $ ← call (← getLeanNatEq) (a, b)
+
+def getLeanNatDiv : CodegenM Func := do
+  getLeanNatBinOp "div" fun blk a b => do
+    let a ← call (← getLeanUnbox) a
+    let b ← call (← getLeanUnbox) b
+    let isZero ← unlikely $ ← b === (0 : UInt64)
+    mkIfBranch blk isZero
+      (fun then_ => do
+        let unit ← call (← getLeanBox) (← constantZero (← size_t))
+        mkReturn then_ unit
+      )
+      (fun else_ => do
+        let div ← a / b
+        mkReturn else_ $ ← call (← getLeanBox) div
+      )
+
+def getLeanNatOverflowMul : CodegenM Func := do
+  importFunction "lean_nat_overflow_mul" (← «lean_object*») #[((← size_t), "a"), (← size_t, "b")]
+
+def getLeanNatMul : CodegenM Func := do
+  getLeanNatBinOp "mul" fun blk a b => do
+    let size_t ← size_t
+    let a' ← call (← getLeanUnbox) a
+    let isZero ← unlikely $ ← a' === (0 : UInt64)
+    mkIfBranch blk isZero
+      (fun then_ => do
+        mkReturn then_ a
+      )
+      (fun else_ => do
+        let b' ← call (← getLeanUnbox) b
+        let (result, overflow) ← overflowCheck dispatchSignedOverflow else_ "result" a' "mul" b'
+        let overflow ← unlikely overflow
+        mkIfBranch else_ overflow
+          (fun then_ => do
+            mkReturn then_ $ ← call (← getLeanNatOverflowMul) (a', b')
+          )
+          (fun else_ => do
+            mkReturn else_ $ ← call (← getLeanBox) (← result ::: size_t)
+          )
+      )
 
 def populateRuntimeTable : CodegenM Unit := do
     discard getLeanIsScalar
@@ -961,3 +1019,6 @@ def populateRuntimeTable : CodegenM Unit := do
     discard $ getLeanNatEq
     discard $ getLeanNatDecEq
     discard $ getLeanNatLAnd
+    discard $ getLeanNatDiv
+    discard $ getLeanNatOverflowMul
+    discard $ getLeanNatMul
