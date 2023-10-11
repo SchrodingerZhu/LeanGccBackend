@@ -5,3 +5,4 @@ a.out
 perf.data
 *.profraw
 .vscode
+*.c

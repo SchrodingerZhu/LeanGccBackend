@@ -322,7 +322,7 @@ def mkFunction
   (retTy : JitType) 
   (params : Array (JitType × String)) 
   (body: Block → Array LeanGccJit.Core.Param → CodegenM Unit)
-  (kind : FunctionKind := FunctionKind.AlwaysInline)
+  (kind : FunctionKind := FunctionKind.Internal)
   : CodegenM Func := getOrCreateFunction name do
     let ctx ← getCtx
     let params' ← params.mapM fun (ty, name) => do ctx.newParam none ty name
