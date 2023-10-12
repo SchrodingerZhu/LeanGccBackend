@@ -66,6 +66,15 @@ def getLeanClosureObject : CodegenM (Struct × Array Field) := do
     (← arrayField (← «lean_object*») 0 "m_objs")
   ]
 
+def getLeanThunkObject : CodegenM (Struct × Array Field) := do
+  let obj_ptr ← «lean_object*»
+  let volatile ← obj_ptr.getVolatile
+  mkStruct "lean_thunk_object" #[
+    (← field (← lean_object) "m_header"),
+    (← field volatile "m_value"),
+    (← field volatile "m_closure")
+  ]
+
 -- TODO: lean_ref_object / lean_task / lean_task_imp;
 
 def getLeanBox : CodegenM Func := do
@@ -920,6 +929,24 @@ def getLeanNatMul : CodegenM Func := do
           )
       )
 
+def Constant.__ATOMIC_SEQ_CST : CodegenM RValue := do
+  mkConstant (← int) 5
+
+def getLeanThunkGet' : CodegenM Func := do 
+  let obj_ptr ← «lean_object*»
+  mkFunction "__lean_gccjit_thunk_get" obj_ptr #[(obj_ptr, "o")] fun blk params => do
+    let o ← getParam! params 0
+    let st ← getLeanThunkObject
+    let retTy ← «lean_object*»
+    let casted ← o ::: (← st.fst.asJitType >>= (·.getPointer))
+    let load ← getBuiltinFunc s!"__atomic_load_{(←(←size_t).getSize)}"
+    let ptrTy ← load.getParam 0 >>= (·.asRValue) >>= (·.getType)
+    let src ← dereferenceField casted st 1 >>= (·.getAddress none)
+    let src ← src ::: ptrTy
+    let seqCst ← Constant.__ATOMIC_SEQ_CST
+    let value ← call load (src, seqCst)
+    mkReturn blk $ ← value ::! retTy
+    
 def populateRuntimeTable : CodegenM Unit := do
     discard getLeanIsScalar
     discard getLeanBox
@@ -1014,11 +1041,12 @@ def populateRuntimeTable : CodegenM Unit := do
     discard $ getLeanNatBigBinOp "ne" true
     discard $ getLeanNatBigBinOp "lt" true
     discard $ getLeanNatBigBinOp "le" true
-    discard $ getLeanNatAdd
-    discard $ getLeanNatSub
-    discard $ getLeanNatEq
-    discard $ getLeanNatDecEq
-    discard $ getLeanNatLAnd
-    discard $ getLeanNatDiv
-    discard $ getLeanNatOverflowMul
-    discard $ getLeanNatMul
+    discard getLeanNatAdd
+    discard getLeanNatSub
+    discard getLeanNatEq
+    discard getLeanNatDecEq
+    discard getLeanNatLAnd
+    discard getLeanNatDiv
+    discard getLeanNatOverflowMul
+    discard getLeanNatMul
+    discard getLeanThunkGet'

@@ -61,7 +61,7 @@ def getCStrArrayToLeanList : CodegenM Func := do
   let obj_ptr ← «lean_object*»
   let unsigned ← unsigned
   let int ← int
-  mkFunction "__lean_internal_cstr_array_to_lean_list" obj_ptr (kind := FunctionKind.Internal) 
+  mkFunction "__lean_gccjit_cstr_array_to_lean_list" obj_ptr (kind := FunctionKind.Internal) 
     #[(int, "argc"), (← cstr.getPointer, "argv")] fun blk params => do
     let n ← getParam! params 0
     let cstrArr ← getParam! params 1 
