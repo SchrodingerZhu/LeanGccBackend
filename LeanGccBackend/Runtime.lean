@@ -864,6 +864,18 @@ def getLeanNatEq : CodegenM Func := do
           )
       )
 
+def getLeanNatLt : CodegenM Func :=
+  getLeanNatBinOp "lt" (isCompare := true) fun blk a b => do
+    let size_t ← size_t
+    let a ← a ::! size_t
+    let b ← b ::! size_t
+    let cmp ← a <<· b
+    mkReturn blk $ ← cmp ::! (← uint8_t)
+
+def getLeanNatDecLt : CodegenM Func := do
+  mkFunction "lean_nat_dec_lt" (← uint8_t) #[((← «lean_object*»), "a"), ((← «lean_object*»), "b")] fun blk params => do
+    mkReturn blk $ ← call (← getLeanNatLt) (← getParam! params 0, ← getParam! params 1)
+
 def getLeanNatLAnd : CodegenM Func := do
   let obj_ptr ← «lean_object*»
   mkFunction "lean_nat_land" obj_ptr #[(obj_ptr, "a"), (obj_ptr, "b")] fun blk params => do
@@ -1045,6 +1057,8 @@ def populateRuntimeTable : CodegenM Unit := do
     discard getLeanNatSub
     discard getLeanNatEq
     discard getLeanNatDecEq
+    discard getLeanNatLt
+    discard getLeanNatDecLt
     discard getLeanNatLAnd
     discard getLeanNatDiv
     discard getLeanNatOverflowMul

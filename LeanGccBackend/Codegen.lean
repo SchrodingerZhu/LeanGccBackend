@@ -44,7 +44,9 @@ def toCInitName (n : Name) : CodegenM String := do
 
 def dispatchUnbox (t : IRType) : CodegenM Func :=
   match t with
-  | IRType.usize  => do getLeanUnboxAux "size_t" (← size_t) 
+  | IRType.usize  => do getLeanUnboxAux "size_t" (← size_t)
+  | IRType.uint8  => do getLeanUnboxAux "uint8_t" (← uint8_t)
+  | IRType.uint16 => do getLeanUnboxAux "uint16_t" (← uint16_t)
   | IRType.uint32 => do getLeanUnboxAux "uint32_t" (← uint32_t)
   | IRType.uint64 => do getLeanUnboxAux "uint64_t" (← uint64_t)
   | IRType.float  => do getLeanUnboxAux "float" (← double)
