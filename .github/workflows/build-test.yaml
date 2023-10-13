@@ -1,0 +1,26 @@
+name: Build and Test
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Install Libgccjit
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y gcc-13 g++-13 libgccjit-13-dev
+      - name: Initialize Lean
+        run: |
+          wget https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -O elan-init.sh
+          bash elan-init.sh -y
+          echo "$HOME/.elan/bin" >> $GITHUB_PATH
+      - name: Build and Test
+        run: |
+          export CC=gcc-13
+          export CXX=g++-13
+          make test

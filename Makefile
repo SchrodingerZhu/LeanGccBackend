@@ -1,4 +1,7 @@
-build/bin/lean-testc: lakefile.lean
+lakefile.olean: lakefile.lean
+	lake update
+
+build/bin/lean-testc: lakefile.olean
 	lake build lean-testc
 
 build/tests/gccjit/%.o: tests/%.lean build/bin/lean-testc
@@ -23,6 +26,7 @@ test-%: tests/%.sh build/tests/system/%.exe build/tests/gccjit/%.exe
 TESTS := $(patsubst tests/%.sh,test-%,$(wildcard tests/*.sh))
 
 .PHONY: test clean
+.PRECIOUS: lakefile.olean
 
 test: $(TESTS)
 
