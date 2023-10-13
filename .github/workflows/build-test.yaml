@@ -23,4 +23,5 @@ jobs:
         run: |
           export CC=gcc-13
           export CXX=g++-13
+          make all
           make test

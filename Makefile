@@ -21,13 +21,18 @@ build/tests/system/%.exe: build/tests/system/%.c
 	leanc $< -o $@ -O3
 
 test-%: tests/%.sh build/tests/system/%.exe build/tests/gccjit/%.exe
-	bash $< build/tests/system/$*.exe build/tests/gccjit/$*.exe
+	@printf 'Testing %s\t' $*
+	@bash $< build/tests/system/$*.exe build/tests/gccjit/$*.exe
+	@printf 'PASS\n'
 
 TESTS := $(patsubst tests/%.sh,test-%,$(wildcard tests/*.sh))
+SYSTEM_EXES := $(patsubst tests/%.lean,build/tests/system/%.exe,$(wildcard tests/*.lean))
+GCCJIT_EXES := $(patsubst tests/%.lean,build/tests/gccjit/%.exe,$(wildcard tests/*.lean))
 
 .PHONY: test clean
-.PRECIOUS: lakefile.olean
+.PRECIOUS: lakefile.olean build/bin/lean-testc build/tests/system/%.exe build/tests/gccjit/%.exe
 
+all: $(SYSTEM_EXES) $(GCCJIT_EXES)
 test: $(TESTS)
 
 clean:
