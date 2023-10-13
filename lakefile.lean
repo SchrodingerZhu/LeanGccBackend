@@ -10,8 +10,9 @@ lean_lib «LeanGccBackend» where
   -- add library configuration options here
 
 @[default_target]
-lean_exe «leangccbackend» where
-  root := `Main
+lean_exe «lean-testc» where
+  srcDir := "bin"
+  root := `LeanTestC
   moreLinkArgs := #["-lgccjit"] -- add this line
   -- Enables the use of the Lean interpreter by the executable (e.g.,
   -- `runFrontend`) at the expense of increased binary size on Linux.

@@ -408,17 +408,17 @@ def getLeanIsExclusive : CodegenM Func := do
       )
 
 def getLeanIsShared : CodegenM Func := do
-  mkFunction "lean_is_shared" (← bool) #[((← «lean_object*»), "o")] fun blk params => do
+  mkFunction "lean_is_shared" (← uint8_t) #[((← «lean_object*»), "o")] fun blk params => do
     let obj ← getParam! params 0
     let isSingleThreaded ← call (← getLeanIsScalar) obj >>= likely
     mkIfBranch blk isSingleThreaded
       (fun then_ => do
         let ty ← getLeanObject
         let m_rc ← dereferenceField obj ty 0
-        mkReturn then_ $ (← m_rc ·>> (1 : UInt64))
+        mkReturn then_ $ ← (← m_rc ·>> (1 : UInt64)) ::: (← uint8_t)
       )
       (fun else_ => do
-        mkReturn else_ (← constantZero (← bool))
+        mkReturn else_ (← constantZero (← uint8_t))
       )
 
 def getLeanInitialize : CodegenM Func := do

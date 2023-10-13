@@ -438,8 +438,6 @@ def emitLit (z : LValue) (t : IRType) (v : LitVal) : FuncM Unit := do
     let length ← mkConstant (←size_t) length.toUInt64
     call (← getLeanMkStringFromBytes) (cstr, length)
     
-    
-
 def emitIsShared (z : LValue) (x : VarId) : FuncM Unit := do
   let x ← getIndexVar x
   mkAssignmentM z $ ← call (← getLeanIsShared) x
@@ -980,7 +978,6 @@ def emitDeclAux (d : Decl) : CodegenM Unit := do
 def emitDecl (d : Decl) : CodegenM Unit := do
   let d := d.normalizeIds; -- ensure we don't have gaps in the variable indices
   try
-    IO.println s!"emitting\n{d}"
     emitDeclAux d
   catch err =>
     throw s!"{err}\ncompiling:\n{d}"
@@ -992,11 +989,8 @@ def emitFns : CodegenM Unit := do
 
 def main : CodegenM Unit := do
   populateRuntimeTable
-  IO.println "start emitting functions declarations"
   emitFnDecls
-  IO.println "start emitting functions"
   emitFns
-  IO.println "start emitting initialization"
   discard $ getModuleInitializationFunction
   emitMainFnIfNeeded
 
@@ -1004,7 +998,6 @@ def main : CodegenM Unit := do
 def emitGccJit (env : Environment) (modName : Name) (filepath : String) : IO Unit := do
   let ctx ← Context.acquire
   ctx.setIntOption IntOption.OptimizationLevel 3
-  ctx.setBoolOption BoolOption.DumpInitialGimple true
   let ctx : GccContext := {env := env,  modName := modName, ctx := ctx}
   match ← main.run default |>.run ctx with
   | Except.error err => throw $ IO.userError err

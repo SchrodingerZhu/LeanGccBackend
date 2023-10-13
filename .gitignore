@@ -6,3 +6,4 @@ perf.data
 *.profraw
 .vscode
 *.c
+*.o
