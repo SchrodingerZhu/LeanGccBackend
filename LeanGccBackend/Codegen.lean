@@ -977,31 +977,54 @@ def emitDeclAux (d : Decl) : CodegenM Unit := do
       emitFnBody b
     | _ => pure ()
 
-def emitDecl (d : Decl) : CodegenM Unit := do
+def emitDecl (d : Decl) (logDecls : Bool) : CodegenM Unit := do
   let d := d.normalizeIds; -- ensure we don't have gaps in the variable indices
   try
+    if logDecls then
+      IO.println s!"emitting {d}"
     emitDeclAux d
   catch err =>
     throw s!"{err}\ncompiling:\n{d}"
 
-def emitFns : CodegenM Unit := do
+def emitFns (logDecls: Bool) : CodegenM Unit := do
   let env ← getEnv
   let decls := getDecls env
-  decls.reverse.forM emitDecl
+  decls.reverse.forM (emitDecl · logDecls)
 
-def main : CodegenM Unit := do
+def main (logDecls: Bool) : CodegenM Unit := do
   populateRuntimeTable
   emitFnDecls
-  emitFns
+  emitFns logDecls
   discard $ getModuleInitializationFunction
   emitMainFnIfNeeded
 
+structure CodegenOptions where
+  optLevel          : Nat          := 3
+  debugInfo         : Bool         := false
+  logDecls          : Bool         := false
+  dumpGimple        : Bool         := false
+  dumpEveryting     : Bool         := false
+  keepIntermediates : Bool         := false
+  printErrors       : Bool         := true
+  gccCmdOpts        : Array String := #[]
+
 @[export lean_ir_emit_gccjit]
-def emitGccJit (env : Environment) (modName : Name) (filepath : String) : IO Unit := do
+def emitGccJit (env : Environment) (modName : Name) (filepath : String) (opts : CodegenOptions := {}) : IO Unit := do
   let ctx ← Context.acquire
-  ctx.setIntOption IntOption.OptimizationLevel 3
+  ctx.setIntOption IntOption.OptimizationLevel opts.optLevel
+  if opts.debugInfo then
+    ctx.setBoolOption BoolOption.DebugInfo true
+  if opts.dumpGimple then
+    ctx.setBoolOption BoolOption.DumpInitialGimple true
+  if opts.dumpEveryting then
+    ctx.setBoolOption BoolOption.DumpEverything true
+  if opts.keepIntermediates then
+    ctx.setBoolOption BoolOption.KeepIntermediates true
+  ctx.setBoolPrintErrorsToStderr opts.printErrors
+  for opt in opts.gccCmdOpts do
+    ctx.addCommandLineOption opt
   let ctx : GccContext := {env := env,  modName := modName, ctx := ctx}
-  match ← main.run default |>.run ctx with
+  match ← (main opts.logDecls).run default |>.run ctx with
   | Except.error err => throw $ IO.userError err
   | Except.ok _ => pure ()
   ctx.ctx.compileToFile OutputKind.ObjectFile filepath
