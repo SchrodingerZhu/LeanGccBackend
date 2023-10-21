@@ -215,6 +215,9 @@ instance [AsRValue τ] [AsRValue η] : HMul τ η (CodegenM RValue) where
 instance [AsRValue τ] [AsRValue η] : HDiv τ η (CodegenM RValue) where
   hDiv x y := do binaryOp BinaryOp.Divide (← asRValue x) (← asRValue y)
 
+instance [AsRValue τ] [AsRValue η] : HMod τ η (CodegenM RValue) where
+  hMod x y := do binaryOp BinaryOp.Divide (← asRValue x) (← asRValue y)
+
 instance [AsRValue τ] [AsRValue η] : HShiftLeft τ η (CodegenM RValue) where
   hShiftLeft x y := do binaryOp BinaryOp.LShift (← asRValue x) (← asRValue y)
 
@@ -226,7 +229,6 @@ instance [AsRValue τ] [AsRValue η] : HAnd τ η (CodegenM RValue) where
 
 instance [AsRValue τ] [AsRValue η] : HOr τ η (CodegenM RValue) where
   hOr x y := do binaryOp BinaryOp.BitwiseOr (← asRValue x) (← asRValue y)
-
 
 class GccJitCompare (α : Type) (β : Type) where
   compare : Comparison → α → β → CodegenM RValue
@@ -268,6 +270,11 @@ instance [AsRValue τ] : HDiv τ UInt64 (CodegenM RValue) where
   hDiv x y := do
     let x' ← asRValue x
     binaryOp BinaryOp.Divide x (← mkConstant (← x'.getType) y)
+
+instance [AsRValue τ] : HMod τ UInt64 (CodegenM RValue) where
+  hMod x y := do
+    let x' ← asRValue x
+    binaryOp BinaryOp.Modulo x (← mkConstant (← x'.getType) y)
 
 instance [AsRValue τ] : HShiftLeft τ UInt64 (CodegenM RValue) where
   hShiftLeft x y := do

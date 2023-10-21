@@ -916,6 +916,20 @@ def getLeanNatDiv : CodegenM Func := do
         mkReturn else_ $ ← call (← getLeanBox) div
       )
 
+def getLeanNatMod : CodegenM Func := do
+  getLeanNatBinOp "mod" fun blk a b => do
+    let a' ← call (← getLeanUnbox) a
+    let b' ← call (← getLeanUnbox) b
+    let isZero ← unlikely $ ← b' === (0 : UInt64)
+    mkIfBranch blk isZero
+      (fun then_ => do
+        mkReturn then_ a
+      )
+      (fun else_ => do
+        let rem ← a' % b'
+        mkReturn else_ $ ← call (← getLeanBox) rem
+      )
+
 def getLeanNatOverflowMul : CodegenM Func := do
   importFunction "lean_nat_overflow_mul" (← «lean_object*») #[((← size_t), "a"), (← size_t, "b")]
 
@@ -1061,6 +1075,7 @@ def populateRuntimeTable : CodegenM Unit := do
     discard getLeanNatDecLt
     discard getLeanNatLAnd
     discard getLeanNatDiv
+    discard getLeanNatMod
     discard getLeanNatOverflowMul
     discard getLeanNatMul
     discard getLeanThunkGet'

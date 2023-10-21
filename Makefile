@@ -1,7 +1,9 @@
 lakefile.olean: lakefile.lean
 	lake update
 
-build/bin/lean-testc: lakefile.olean
+LEAN_FILES := $(wildcard LeanGccJit/*.lean)
+
+build/bin/lean-testc: lakefile.olean $(LEAN_FILES)
 	lake build lean-testc
 
 build/tests/gccjit/%.o: tests/%.lean build/bin/lean-testc
