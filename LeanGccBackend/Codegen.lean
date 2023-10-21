@@ -334,9 +334,10 @@ def emitFnDeclAux (decl : Decl) (cppBaseName : String) (isExternal : Bool) : Cod
     else GlobalKind.Exported
     let retTy ← toCType decl.resultType
     discard $ getOrCreateGlobal cppBaseName retTy (kind := kind)
-    let name := "_init_" ++ cppBaseName
-    let func ← ctx.newFunction none FunctionKind.Internal retTy name #[] false
-    modify fun s => { s with declMap := s.declMap.insert name (func, #[]) }
+    if !isExternal then do
+      let name := "_init_" ++ cppBaseName
+      let func ← ctx.newFunction none FunctionKind.Internal retTy name #[] false
+      modify fun s => { s with declMap := s.declMap.insert name (func, #[]) }
   else do
     let kind := if isClosedTermName env decl.name then
       FunctionKind.Internal
