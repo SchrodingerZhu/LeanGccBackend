@@ -1051,6 +1051,42 @@ def dispatchPlainDecCmpFunc (ty: String) (op : String) : CodegenM Func := do
     let a ← getParam! params 0
     let b ← getParam! params 1
     mkReturn blk $ ← dispatchPlainCmpExpr a b op >>= (· ::: u8)
+
+def dispatchBuiltinClz (ty : JitType) : CodegenM (Func × JitType) := do
+  let ctx ← getCtx
+  let size ← ty.getSize
+  let uint ← ctx.getType TypeEnum.UnsignedInt
+  if size <= (← uint.getSize) then do
+    return (← getBuiltinFunc "__builtin_clz", uint)
+  else do
+    let ulong ← ctx.getType TypeEnum.UnsignedLong
+    if size <= (← ulong.getSize) then do
+      return (← getBuiltinFunc "__builtin_clzl", ulong)
+    else do
+      let ulonglong ← ctx.getType TypeEnum.UnsignedLongLong
+      if size <= (← ulonglong.getSize) then do
+        return (← getBuiltinFunc "__builtin_clzll", ulonglong)
+      else
+        throw "Unsupported type"
+
+def dispatchLog2 (ty: String) : CodegenM Func := do
+  let t ← dispatchPlainType ty
+  mkFunction s!"lean_{ty}_log2" t #[(t, "a")] fun blk params => do
+    let a ← getParam! params 0
+    let (func, intermidiate) ← dispatchBuiltinClz t
+    let intermidiateSize ← intermidiate.getSize
+    let mask := intermidiateSize.toUInt64 * 8 - 1
+    let a ← a ::: intermidiate
+    let isZero ← unlikely $ ← a === (0 : UInt64)
+    mkIfBranch blk isZero
+      (fun then_ => do
+        mkReturn then_ $ ← constantZero t
+      )
+      (fun else_ => do
+        let clz ← call func a
+        let log2 ← clz ^^^ mask
+        mkReturn else_ $ ← log2 ::: t
+      )
     
 def populateRuntimeTable : CodegenM Unit := do
     discard getLeanIsScalar
@@ -1163,3 +1199,4 @@ def populateRuntimeTable : CodegenM Unit := do
         discard $ dispatchPlainBinOpFunc ty op
       for cmp in #["eq", "lt", "le"] do
         discard $ dispatchPlainDecCmpFunc ty cmp
+      discard $ dispatchLog2 ty
