@@ -972,6 +972,85 @@ def getLeanThunkGet' : CodegenM Func := do
     let seqCst ← Constant.__ATOMIC_SEQ_CST
     let value ← call load (src, seqCst)
     mkReturn blk $ ← value ::! retTy
+
+def dispatchPlainType (x : String) : CodegenM JitType := 
+  match x with
+  | "uint8" => uint8_t
+  | "uint16" => uint16_t
+  | "uint32" => uint32_t
+  | "uint64" => uint64_t
+  | "usize" => size_t
+  | _ => throw "Unsupported type"
+
+def dispatchSafeDiv (x: String) : CodegenM Func := do
+  let ty ← dispatchPlainType x
+  mkFunction s!"__lean_gccjit_safe_div_{x}" ty #[(ty, "a"), (ty, "b")] fun blk params => do
+    let a ← getParam! params 0
+    let b ← getParam! params 1
+    let isZero ← unlikely $ ← b === (0 : UInt64)
+    mkIfBranch blk isZero
+      (fun then_ => do
+        mkReturn then_ $ ← constantZero ty
+      )
+      (fun else_ => do
+        mkReturn else_ $ ← a / b
+      )
+
+def dispatchSafeMod (x: String) : CodegenM Func := do
+  let ty ← dispatchPlainType x
+  mkFunction s!"__lean_gccjit_safe_mod_{x}" ty #[(ty, "a"), (ty, "b")] fun blk params => do
+    let a ← getParam! params 0
+    let b ← getParam! params 1
+    let isZero ← unlikely $ ← b === (0 : UInt64)
+    mkIfBranch blk isZero
+      (fun then_ => do
+        mkReturn then_ a
+      )
+      (fun else_ => do
+        mkReturn else_ $ ← a % b
+      )
+
+def dispatchPlainBinExpr [AsRValue α] [AsRValue β] (ty: String) (x : α) (y : β) (op : String) : CodegenM RValue :=
+  match op with
+  | "add" => x + y
+  | "sub" => x - y
+  | "mul" => x * y
+  | "div" => do
+    call (← dispatchSafeDiv ty) (x, y)
+  | "mod" => do 
+    call (← dispatchSafeMod ty) (x, y)
+  | "land" => x &&& y
+  | "lor" => x ||| y
+  | "xor" => x ^^^ y
+  | "shift_left" => do
+    let size ← dispatchPlainType ty >>= (·.getSize)
+    x <<< (← y % (size * 8).toUInt64)
+  | "shift_right" => do
+    let size ← dispatchPlainType ty >>= (·.getSize)
+    x >>> (← y % (size * 8).toUInt64)
+  | _ => throw "Unsupported operation"
+
+def dispatchPlainBinOpFunc (ty: String) (op : String) : CodegenM Func := do
+  let t ← dispatchPlainType ty 
+  mkFunction s!"lean_{ty}_{op}" t #[(t, "a"), (t, "b")] fun blk params => do
+    let a ← getParam! params 0
+    let b ← getParam! params 1
+    mkReturn blk $ ← dispatchPlainBinExpr ty a b op 
+
+def dispatchPlainCmpExpr [AsRValue α] [AsRValue β] (x : α) (y : β) (op : String) : CodegenM RValue :=
+  match op with
+  | "eq" => x === y
+  | "lt" => x <<· y
+  | "le" => x <== y
+  | _ => throw "Unsupported operation"
+
+def dispatchPlainDecCmpFunc (ty: String) (op : String) : CodegenM Func := do
+  let t ← dispatchPlainType ty 
+  let u8 ← uint8_t
+  mkFunction s!"lean_{ty}_dec_{op}" u8 #[(t, "a"), (t, "b")] fun blk params => do
+    let a ← getParam! params 0
+    let b ← getParam! params 1
+    mkReturn blk $ ← dispatchPlainCmpExpr a b op >>= (· ::: u8)
     
 def populateRuntimeTable : CodegenM Unit := do
     discard getLeanIsScalar
@@ -1079,3 +1158,8 @@ def populateRuntimeTable : CodegenM Unit := do
     discard getLeanNatOverflowMul
     discard getLeanNatMul
     discard getLeanThunkGet'
+    for ty in #["uint8", "uint16", "uint32", "uint64", "usize"] do
+      for op in #["add", "sub", "mul", "div", "mod", "land", "lor", "xor", "shift_left", "shift_right"] do
+        discard $ dispatchPlainBinOpFunc ty op
+      for cmp in #["eq", "lt", "le"] do
+        discard $ dispatchPlainDecCmpFunc ty cmp

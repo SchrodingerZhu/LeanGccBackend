@@ -230,6 +230,9 @@ instance [AsRValue τ] [AsRValue η] : HAnd τ η (CodegenM RValue) where
 instance [AsRValue τ] [AsRValue η] : HOr τ η (CodegenM RValue) where
   hOr x y := do binaryOp BinaryOp.BitwiseOr (← asRValue x) (← asRValue y)
 
+instance [AsRValue τ] [AsRValue η] : HXor τ η (CodegenM RValue) where
+  hXor x y := do binaryOp BinaryOp.BitwiseXor (← asRValue x) (← asRValue y)
+
 class GccJitCompare (α : Type) (β : Type) where
   compare : Comparison → α → β → CodegenM RValue
 
@@ -295,6 +298,11 @@ instance [AsRValue τ] : HOr τ UInt64 (CodegenM RValue) where
   hOr x y := do
     let x' ← asRValue x
     binaryOp BinaryOp.BitwiseOr x (← mkConstant (← x'.getType) y)
+
+instance [AsRValue τ] : HXor τ UInt64 (CodegenM RValue) where
+  hXor x y := do
+    let x' ← asRValue x
+    binaryOp BinaryOp.BitwiseXor x (← mkConstant (← x'.getType) y)
   
 def mkIfBranch [AsRValue τ] (blk : Block) (cond: τ)
   (then_ : Block → CodegenM Unit)
