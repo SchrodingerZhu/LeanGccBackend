@@ -277,7 +277,8 @@ def emitDeclInit (d : Decl) (res: LValue) (errBlk: Block) (w : RValue) : FuncM U
     | _ =>
       let f ← getFuncDecl $ ← toCInitName n
       mkAssignmentM gv $ ← call f ()
-      mkEvalM $ ←call (← getLeanMarkPersistent) gv
+      if !d.resultType.isScalar then
+        mkEvalM $ ←call (← getLeanMarkPersistent) gv
 
 def getModuleInitializationFunction : CodegenM Func := do
   let bool ← bool
@@ -674,9 +675,10 @@ def fakeDefaultReturn : FuncM RValue := do
   else
     throw "invalid return type"
 
-def emitUnreachable : FuncM Unit := do
-  let panicFn ← getLeanInternalPanicUnreachable
-  mkEvalM $ ←call panicFn ()
+def emitUnreachable (panic : Bool := true) : FuncM Unit := do
+  if panic then do
+    let panicFn ← getLeanInternalPanicUnreachable
+    mkEvalM $ ←call panicFn ()
   let builtinUnreachable ← getBuiltinFunc "__builtin_unreachable"
   mkEvalM $ ←call builtinUnreachable ()
   mkReturnM $ ← fakeDefaultReturn
@@ -812,7 +814,7 @@ partial def emitCase (typeId : Name) (x : VarId) (ty: IRType) (alts: Array Alt) 
     | none     => do
       let blk ← mkNewBlock
       moveTo blk
-      emitUnreachable
+      emitUnreachable false
       pure blk
   cursor.endWithSwitch none tag default cases
   

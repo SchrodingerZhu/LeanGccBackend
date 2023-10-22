@@ -1117,6 +1117,10 @@ def dispatchOfNat  (ty : String) : CodegenM Unit := do
     mkEval blk $ ← call (← getLeanDec) a
     mkReturn blk res
 
+def registerBuiltinFunc (f : String) : CodegenM Unit := do
+  let builtin ← getBuiltinFunc f
+  modify fun s => { s with funcMap := s.funcMap.insert f builtin }
+
 def populateRuntimeTable : CodegenM Unit := do
     discard getLeanIsScalar
     discard getLeanBox
@@ -1232,3 +1236,5 @@ def populateRuntimeTable : CodegenM Unit := do
       dispatchOfNat ty
       if ty != "uint64" && ty != "usize" then
         discard $ dispatchSmallIntegralToNat ty
+    registerBuiltinFunc "cos"
+    registerBuiltinFunc "sin"
