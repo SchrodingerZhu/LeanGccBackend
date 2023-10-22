@@ -732,7 +732,7 @@ def getLeanUnsignedToNat : CodegenM Func := do
     let i ← getParam! params 0
     mkReturn blk $ (← call (← getLeanUsizeToNat) (← i ::: (← size_t)))
 
-def getLeanUint64ToNat : CodegenM Func := do
+def getLeanUInt64ToNat : CodegenM Func := do
   let uint64_t ← uint64_t
   mkFunction "lean_uint64_to_nat" (← «lean_object*») #[((uint64_t), "i")] fun blk params => do
     let i ← getParam! params 0
@@ -1087,7 +1087,36 @@ def dispatchLog2 (ty: String) : CodegenM Func := do
         let log2 ← clz ^^^ mask
         mkReturn else_ $ ← log2 ::: t
       )
-    
+def dispatchSmallIntegralToNat (ty : String) : CodegenM Func := do
+  let t ← dispatchPlainType ty
+  let usizeToNat ← getLeanUsizeToNat
+  mkFunction s!"lean_{ty}_to_nat" (← «lean_object*») #[(t, "a")] fun blk params => do
+    let a ← getParam! params 0
+    let a' ← a ::: (← size_t)
+    mkReturn blk $ ← call usizeToNat a'
+
+def dispatchOfNat  (ty : String) : CodegenM Unit := do
+  let t ← dispatchPlainType ty
+  let ofBigNat ← importFunction s!"lean_{ty}_of_big_nat" t #[((← «lean_object*»), "a")]
+  let leanIsScalar ← getLeanIsScalar
+  let borrowFunc ← mkFunction s!"lean_{ty}_of_nat" t #[(← «lean_object*», "a")] fun blk params => do
+    let a ← getParam! params 0
+    let isSmall ← call leanIsScalar a >>= likely
+    mkIfBranch blk isSmall
+      (fun then_ => do
+        let unboxed ← call (← getLeanUnbox) a
+        mkReturn then_ $ ← unboxed ::: t
+      )
+      (fun else_ => do
+        mkReturn else_ $ ← call ofBigNat a
+      )
+  discard $  mkFunction s!"lean_{ty}_of_nat_mk" t #[(← «lean_object*», "a")] fun blk params => do
+    let a ← getParam! params 0
+    let res ← mkLocalVar blk t "res"
+    mkAssignment blk res $ ← call borrowFunc a
+    mkEval blk $ ← call (← getLeanDec) a
+    mkReturn blk res
+
 def populateRuntimeTable : CodegenM Unit := do
     discard getLeanIsScalar
     discard getLeanBox
@@ -1171,7 +1200,7 @@ def populateRuntimeTable : CodegenM Unit := do
     discard getLeanBigUInt64ToNat
     discard getLeanUsizeToNat
     discard getLeanUnsignedToNat
-    discard getLeanUint64ToNat
+    discard getLeanUInt64ToNat
     discard $ getLeanNatBigBinOp "add"
     discard $ getLeanNatBigBinOp "sub"
     discard $ getLeanNatBigBinOp "mul"
@@ -1200,3 +1229,6 @@ def populateRuntimeTable : CodegenM Unit := do
       for cmp in #["eq", "lt", "le"] do
         discard $ dispatchPlainDecCmpFunc ty cmp
       discard $ dispatchLog2 ty
+      dispatchOfNat ty
+      if ty != "uint64" && ty != "usize" then
+        discard $ dispatchSmallIntegralToNat ty
