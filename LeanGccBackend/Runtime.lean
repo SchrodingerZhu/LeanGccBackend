@@ -1412,7 +1412,7 @@ def getLeanArrayUGet : CodegenM Func := do
 
 def getLeanArraySet : CodegenM Func := do
   let obj_ptr ← «lean_object*»
-  mkFunction "lean_array_set" obj_ptr #[(obj_ptr, "a"), (obj_ptr, "i"), (obj_ptr, "v")] fun blk params => do
+  mkFunction "lean_array_set" obj_ptr #[(obj_ptr, "a"), (obj_ptr, "i"), (obj_ptr, "v")] (kind := FunctionKind.AlwaysInline) fun blk params => do
     let a ← getParam! params 0
     let i ← getParam! params 1
     let v ← getParam! params 2
