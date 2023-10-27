@@ -1159,7 +1159,7 @@ def getLeanMkEmptyArrayWithCapacity : CodegenM Func := do
         mkReturn else_ null
       )
 
-def populateRuntimeTable : CodegenM Unit := do
+def registerBasicFunctions : CodegenM Unit := do
     discard getLeanIsScalar
     discard getLeanBox
     discard getLeanUnbox
@@ -1214,6 +1214,8 @@ def populateRuntimeTable : CodegenM Unit := do
     discard getLeanMarkMT
     discard getLeanMarkPersistent
     discard getLeanSetSTHeader
+
+def registerCtorFunctions : CodegenM Unit := do
     discard getLeanCtorObjCPtr
     discard getLeanAllocCtor
     discard getLeanCtorGet
@@ -1232,11 +1234,15 @@ def populateRuntimeTable : CodegenM Unit := do
     discard $ getLeanCtorSetAux "uint32" (← uint32_t)
     discard $ getLeanCtorSetAux "uint64" (← uint64_t)
     discard $ getLeanCtorSetAux "float" (← double)
+
+def registerClosureFunctions : CodegenM Unit := do
     discard getLeanAllocClosure
     discard getLeanClosureSet
     (16 : Nat).forM fun i => do
       discard $ getLeanApply i
     discard getLeanApplyM
+
+def registerNatFunctions : CodegenM Unit := do
     discard getLeanCStrToNat
     discard getLeanBigUSizeToNat
     discard getLeanBigUInt64ToNat
@@ -1264,7 +1270,8 @@ def populateRuntimeTable : CodegenM Unit := do
     discard getLeanNatMod
     discard getLeanNatOverflowMul
     discard getLeanNatMul
-    discard getLeanThunkGet'
+
+def registerUnsignedFunctions : CodegenM Unit := do
     for ty in #["uint8", "uint16", "uint32", "uint64", "usize"] do
       for op in #["add", "sub", "mul", "div", "mod", "land", "lor", "xor", "shift_left", "shift_right"] do
         discard $ dispatchPlainBinOpFunc ty op
@@ -1274,6 +1281,23 @@ def populateRuntimeTable : CodegenM Unit := do
       dispatchOfNat ty
       if ty != "uint64" && ty != "usize" then
         discard $ dispatchSmallIntegralToNat ty
+
+def registerMathKernels: CodegenM Unit := do
     registerBuiltinFunc "cos"
     registerBuiltinFunc "sin"
-    discard $ getLeanMkEmptyArrayWithCapacity
+
+def registerThunkFunctions : CodegenM Unit := do
+    discard getLeanThunkGet'
+
+def regiterArrayFunctions : CodegenM Unit := do
+    discard getLeanMkEmptyArrayWithCapacity
+
+def populateRuntimeTable : CodegenM Unit := do
+    registerBasicFunctions
+    registerCtorFunctions
+    registerClosureFunctions
+    registerNatFunctions
+    registerUnsignedFunctions
+    registerMathKernels
+    registerThunkFunctions
+    regiterArrayFunctions
