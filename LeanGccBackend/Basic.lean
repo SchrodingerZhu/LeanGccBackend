@@ -29,7 +29,7 @@ structure GccContext where
 
 structure State where
   funcMap      : HashMap String Func
-  declMap      : HashMap FunId (Func × (Array (LeanGccJit.Core.Param × String))) 
+  declMap      : HashMap FunId (Func × (Array (LeanGccJit.Core.Param × String)))
   constantMap  : HashMap String RValue
   globalMap    : HashMap String LValue
   structMap    : HashMap String (Struct × Array Field)
@@ -58,7 +58,7 @@ def getOrCreateConstant (name : String) (create : CodegenM RValue) : CodegenM RV
     modify fun s => { s with constantMap := s.constantMap.insert name rv }
     pure rv
 
-def getOrCreateStruct (name : String) 
+def getOrCreateStruct (name : String)
   (create : CodegenM (Struct × Array Field)) : CodegenM (Struct × Array Field) := do
   match (← get).structMap.find? name with
   | some s => pure s
@@ -76,7 +76,7 @@ def getGlobalForLiteral (str: String) (ty: JitType) : CodegenM (LValue × Bool) 
     let v ← ctx.newGlobal none GlobalKind.Internal ty s!"__lean_gccjit_literal_{counter}"
     modify fun s => { s with globalMap := s.globalMap.insert str v }
     pure (v, false)
-  
+
 def getOrCreateGlobal (name : String) (ty : JitType) (kind: GlobalKind := GlobalKind.Internal) (init : Option RValue := none) : CodegenM LValue := do
   match (← get).globalMap.find? name with
   | some v => pure v
@@ -146,10 +146,10 @@ def bitfield (ty : JitType) (size : Nat) (name : String) : CodegenM Field := do
   let ctx ← getCtx
   ctx.newBitField none ty size name
 
-def arrayField (ty : JitType) (size : Nat) (name : String) : CodegenM Field := do 
+def arrayField (ty : JitType) (size : Nat) (name : String) : CodegenM Field := do
   field (← getCtx >>= (·.newArrayType none ty size)) name
 
-def constantOne (x : JitType) : CodegenM RValue := 
+def constantOne (x : JitType) : CodegenM RValue :=
   getCtx >>= (do ·.one x)
 
 def constantZero (x : JitType) : CodegenM RValue :=
@@ -181,15 +181,15 @@ instance [AsRValue τ] : GccJitCall τ where
   call f x := getCtx >>= (do ·.newCall none f #[(← asRValue x)])
 
 instance [AsRValue a] [AsRValue b] : GccJitCall (a × b) where
-  call f x := do 
+  call f x := do
     getCtx >>= (·.newCall none f #[(← asRValue x.1), (← asRValue x.2)])
 
 instance [AsRValue a] [AsRValue b] [AsRValue c] : GccJitCall (a × b × c) where
-  call f x := do 
+  call f x := do
     getCtx >>= (·.newCall none f #[(← asRValue x.1), (← asRValue x.2.1), (← asRValue x.2.2)])
 
 instance [AsRValue a] [AsRValue b] [AsRValue c] [AsRValue d] : GccJitCall (a × b × c × d) where
-  call f x := do 
+  call f x := do
     getCtx >>= (·.newCall none f #[(← asRValue x.1), (← asRValue x.2.1), (← asRValue x.2.2.1), (← asRValue x.2.2.2)])
 
 export GccJitCall (call)
@@ -303,10 +303,10 @@ instance [AsRValue τ] : HXor τ UInt64 (CodegenM RValue) where
   hXor x y := do
     let x' ← asRValue x
     binaryOp BinaryOp.BitwiseXor x (← mkConstant (← x'.getType) y)
-  
+
 def mkIfBranch [AsRValue τ] (blk : Block) (cond: τ)
   (then_ : Block → CodegenM Unit)
-  (else_ : Block → CodegenM Unit) 
+  (else_ : Block → CodegenM Unit)
   (then_name : Option String := none)
   (else_name : Option String := none)
 : CodegenM Unit := do
@@ -317,25 +317,25 @@ def mkIfBranch [AsRValue τ] (blk : Block) (cond: τ)
   then_ onTrue
   else_ onFalse
 
-  
+
 def likely [AsRValue τ] (x : τ) : CodegenM RValue := do
   let long ← «long»
   let one ← constantOne long
-  let x ← cast x long 
+  let x ← cast x long
   let res ← call (← getBuiltinFunc "__builtin_expect") (x, one)
   cast res (← bool)
 
 def unlikely [AsRValue τ] (x : τ) : CodegenM RValue := do
   let long ← «long»
   let zero ← constantZero long
-  let x ← cast x long 
+  let x ← cast x long
   let res ← call (← getBuiltinFunc "__builtin_expect") (x, zero)
   cast res (← bool)
 
-def mkFunction 
-  (name : String) 
-  (retTy : JitType) 
-  (params : Array (JitType × String)) 
+def mkFunction
+  (name : String)
+  (retTy : JitType)
+  (params : Array (JitType × String))
   (body: Block → Array LeanGccJit.Core.Param → CodegenM Unit)
   (kind : FunctionKind := FunctionKind.Internal)
   : CodegenM Func := getOrCreateFunction name do
@@ -343,7 +343,7 @@ def mkFunction
     let params' ← params.mapM fun (ty, name) => do ctx.newParam none ty name
     let func ← ctx.newFunction none kind retTy name params' false
     match kind with
-    | FunctionKind.Imported => 
+    | FunctionKind.Imported =>
       return func
     | _ => do
       let block ← func.newBlock "entry"
@@ -382,19 +382,19 @@ def arrayToPtr [AsRValue α] (x : α) : CodegenM RValue := do
   let elem ← mkArrayAccess x (← constantZero (← size_t))
   elem.getAddress none
 
-def mkWhileLoop 
-  (blk : Block) 
-  (cond : RValue) 
-  (body : Block → CodegenM Unit) 
+def mkWhileLoop
+  (blk : Block)
+  (cond : RValue)
+  (body : Block → CodegenM Unit)
   (after : Block → CodegenM Unit) : CodegenM Unit := do
   let func ← blk.getFunction
   let bodyBlock ← func.newBlock none
-  let afterBlock ← func.newBlock none 
+  let afterBlock ← func.newBlock none
   blk.endWithConditional none cond bodyBlock afterBlock
   body bodyBlock
   bodyBlock.endWithConditional none cond bodyBlock afterBlock
   after afterBlock
-  
+
 class GccJitUnary (α : Type) where
   unary : UnaryOp → α → CodegenM RValue
 
@@ -405,7 +405,7 @@ instance [AsRValue τ] : GccJitUnary τ where
 
 export GccJitUnary (unary)
 
-prefix:20 " ·-· " => unary UnaryOp.Minus 
+prefix:20 " ·-· " => unary UnaryOp.Minus
 prefix:20 " ·~· " => unary UnaryOp.BitwiseNegate
 prefix:20 " ·!· " => unary UnaryOp.LogicalNegate
 
@@ -413,3 +413,6 @@ def dereferenceField [AsRValue α] (x : α) (structTy : Struct × Array Field) (
   let x ← asRValue x
   x.dereferenceField none (← getField! structTy.2 idx)
 
+def dereference  [AsRValue α] (x : α) : CodegenM LValue := do
+  let x ← asRValue x
+  x.dereference none
