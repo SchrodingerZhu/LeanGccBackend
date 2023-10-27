@@ -1146,6 +1146,9 @@ def getLeanAllocArray : CodegenM Func := do
     let arr@(st, _) ← getLeanArrayObject
     let leanArrayObjPtr ← st.asJitType >>= (·.getPointer)
     mkAssignment blk obj $ ← call (← getLeanAllocObject) allocSize
+    let tag ← mkConstant (← unsigned) Constant.LeanArray
+    let other ← mkConstant (← unsigned) 0
+    mkEval blk $ ← call (← getLeanSetSTHeader) (obj, tag, other)
     let obj' ← obj ::: leanArrayObjPtr
     let m_size ← dereferenceField obj' arr 1
     let m_capacity ← dereferenceField obj' arr 2
