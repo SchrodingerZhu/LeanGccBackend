@@ -17,14 +17,14 @@ def addPrime {N : Nat} (p : Nat) : Sieve N Unit := do
 def runSieve {N : Nat}  : Sieve N Unit := do
   let mut i : Nat := 2
   while i < N + 1 do
-    if (← getFactor i) == 0 then 
+    if (← getFactor i) == 0 then
       setFactor i i
       addPrime i
     for p in (← get >>= (pure ·.primes)) do
-      if i * p > N then 
+      if i * p > N then
         break
       setFactor (i * p) p
-      if i % p == 0 then 
+      if i % p == 0 then
         break
     i := i + 1
 
@@ -35,5 +35,4 @@ def getPrimes (N : Nat ) : Array Nat :=
 
 def main (xs : List String) : IO Unit := do
   let N := xs.head!.toNat!
-  IO.println (getPrimes N)
-  
+  IO.println (getPrimes N).toList

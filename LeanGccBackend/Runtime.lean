@@ -396,7 +396,7 @@ def getLeanObjTag : CodegenM Func := do
 def getLeanIsExclusive : CodegenM Func := do
   mkFunction "lean_is_exclusive" (← bool) #[((← «lean_object*»), "o")] fun blk params => do
     let obj ← getParam! params 0
-    let isSingleThreaded ← call (← getLeanIsScalar) obj >>= likely
+    let isSingleThreaded ← call (← getLeanIsST) obj >>= likely
     mkIfBranch blk isSingleThreaded
       (fun then_ => do
         let ty ← getLeanObject
