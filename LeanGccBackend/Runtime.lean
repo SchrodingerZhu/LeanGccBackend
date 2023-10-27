@@ -56,7 +56,7 @@ def getLeanStringObject : CodegenM (Struct × Array Field) := do
     (← arrayField (← char) 0 "m_data")
   ]
 
-def getLeanClosureObject : CodegenM (Struct × Array Field) := do 
+def getLeanClosureObject : CodegenM (Struct × Array Field) := do
   let uint16_t ← uint16_t
   mkStruct "lean_closure_object" #[
     (←  field (← lean_object) "m_header"),
@@ -146,7 +146,7 @@ def getLeanAlign : CodegenM Func := do
     mkReturn blk $ (← v + (← (← (·-· v)) &&& (← a - (1 : UInt64))))
 
 def Constant.LEAN_OBJECT_SIZE_DELTA : CodegenM RValue := do
-  getOrCreateConstant "LEAN_OBJECT_SIZE_DELTA" $ 
+  getOrCreateConstant "LEAN_OBJECT_SIZE_DELTA" $
     getCtx >>= (do ·.newRValueFromUInt64 (← size_t) 8)
 
 def Constant.SIZE_T_SIZE : CodegenM RValue :=
@@ -179,8 +179,8 @@ def getLeanAllocSmallObject : CodegenM Func := do
     mkAssignment blk alignedSz $ alignedSz'
     let slot ← call (← getLeanGetSlotIdx) alignedSz
     mkReturn blk $ (← (← call (← getLeanAllocSmall) ((← alignedSz ::: (← unsigned)), slot)) ::: (← «lean_object*»))
-    
-def getLeanAllocCtorMemory : CodegenM Func := do 
+
+def getLeanAllocCtorMemory : CodegenM Func := do
   mkFunction "lean_alloc_ctor_memory" (← «lean_object*») #[((← size_t), "sz")] fun blk params => do
     let sz ← getParam! params 0
     let alignedSz ← call (← getLeanAlign) (sz, (← Constant.LEAN_OBJECT_SIZE_DELTA))
@@ -188,7 +188,7 @@ def getLeanAllocCtorMemory : CodegenM Func := do
     let memory ← mkLocalVar blk (← «lean_object*») "memory"
     mkAssignment blk memory $
       (←(←call (←getLeanAllocSmall) ((←alignedSz ::: (←unsigned)), slot)) ::: (← «lean_object*»))
-    mkIfBranch blk (← alignedSz ·>> sz) 
+    mkIfBranch blk (← alignedSz ·>> sz)
       (fun then_ => do
         let memory' ← memory ::: (← size_t >>= (·.getPointer))
         let offset ← (← alignedSz / (← Constant.SIZE_T_SIZE)) - (1 : UInt64)
@@ -255,7 +255,7 @@ def getLeanIsPersistent : CodegenM Func := do
     mkReturn blk $ (← res === (0 : UInt64))
 
 def getLeanHasRc : CodegenM Func := do
-  mkFunction "lean_is_persistent" (← bool) #[((← «lean_object*»), "o")] fun blk params => do
+  mkFunction "lean_has_rc" (← bool) #[((← «lean_object*»), "o")] fun blk params => do
     let obj ← getParam! params 0
     let ty ← getLeanObject
     let res ← (← dereferenceField obj ty 0) ::: (← int)
@@ -272,15 +272,22 @@ def getLeanIncRef : CodegenM Func := do
     let obj ← getParam! params 0
     let ty ← getLeanObject
     let isSingleThreaded ← call (← getLeanIsST) obj >>= likely
+    let m_rc ← dereferenceField obj ty 0
     mkIfBranch blk isSingleThreaded
       (fun then_ => do
-        let m_rc ← dereferenceField obj ty 0
         mkAssignmentOp then_ BinaryOp.Plus m_rc (← constantOne (← int))
         then_.endWithVoidReturn none
       )
       (fun else_ => do
-        mkEval else_ $ (← call (← getLeanIncRefCold) obj)
-        else_.endWithVoidReturn none
+        let isPersistent ← (m_rc === (0 : UInt64))
+        mkIfBranch else_ isPersistent
+          (fun then_ => do
+            then_.endWithVoidReturn none
+          )
+          (fun else_ => do
+            mkEval else_ $ (← call (← getLeanIncRefCold) obj)
+            else_.endWithVoidReturn none
+          )
       )
 
 def getLeanIncRefN : CodegenM Func := do
@@ -289,15 +296,22 @@ def getLeanIncRefN : CodegenM Func := do
     let n ← getParam! params 1
     let ty ← getLeanObject
     let isSingleThreaded ← call (← getLeanIsST) obj >>= likely
+    let m_rc ← dereferenceField obj ty 0
     mkIfBranch blk isSingleThreaded
       (fun then_ => do
-        let m_rc ← dereferenceField obj ty 0
         mkAssignmentOp then_ BinaryOp.Plus m_rc (← n ::: (← int))
         then_.endWithVoidReturn none
       )
       (fun else_ => do
-        mkEval else_ $ (← call (← getLeanIncRefNCold) (obj, n))
-        else_.endWithVoidReturn none
+        let isPersistent ← (m_rc === (0 : UInt64))
+        mkIfBranch else_ isPersistent
+          (fun then_ => do
+            then_.endWithVoidReturn none
+          )
+          (fun else_ => do
+            mkEval else_ $ (← call (← getLeanIncRefNCold) (obj, n))
+            else_.endWithVoidReturn none
+          )
       )
 
 def getLeanDecRefCold : CodegenM Func := do
@@ -315,8 +329,15 @@ def getLeanDecRef : CodegenM Func := do
         then_.endWithVoidReturn none
       )
       (fun else_ => do
-        mkEval else_ $ (← call (← getLeanDecRefCold) obj)
-        else_.endWithVoidReturn none
+        let isPersistent ← (m_rc === (0 : UInt64))
+        mkIfBranch else_ isPersistent
+          (fun then_ => do
+            then_.endWithVoidReturn none
+          )
+          (fun else_ => do
+            mkEval else_ $ (← call (← getLeanDecRefCold) obj)
+            else_.endWithVoidReturn none
+          )
       )
 
 private def ifNotScalar (name : String)  (onNotScalar : Block → Array LeanGccJit.Core.Param → CodegenM Unit) (extraParam : Array (JitType × String) := #[]) : CodegenM Func := do
@@ -330,7 +351,7 @@ private def ifNotScalar (name : String)  (onNotScalar : Block → Array LeanGccJ
         else_.endWithVoidReturn none
       )
 
-def getLeanInc : CodegenM Func := 
+def getLeanInc : CodegenM Func :=
   ifNotScalar "lean_inc" fun block params => do
     call (← getLeanIncRef) (← getParam! params 0) >>= mkEval block
 
@@ -339,7 +360,7 @@ def getLeanIncN : CodegenM Func := do
     call (← getLeanIncRefN) ((← getParam! params 0), (← getParam! params 1)) >>= mkEval block)
     #[((← unsigned), "n")]
 
-def getLeanDec : CodegenM Func := 
+def getLeanDec : CodegenM Func :=
   ifNotScalar "lean_dec" fun block params => do
     call (← getLeanDecRef) (← getParam! params 0) >>= mkEval block
 
@@ -396,7 +417,7 @@ def getLeanObjTag : CodegenM Func := do
 def getLeanIsExclusive : CodegenM Func := do
   mkFunction "lean_is_exclusive" (← bool) #[((← «lean_object*»), "o")] fun blk params => do
     let obj ← getParam! params 0
-    let isSingleThreaded ← call (← getLeanIsScalar) obj >>= likely
+    let isSingleThreaded ← call (← getLeanIsST) obj >>= likely
     mkIfBranch blk isSingleThreaded
       (fun then_ => do
         let ty ← getLeanObject
@@ -410,7 +431,7 @@ def getLeanIsExclusive : CodegenM Func := do
 def getLeanIsShared : CodegenM Func := do
   mkFunction "lean_is_shared" (← uint8_t) #[((← «lean_object*»), "o")] fun blk params => do
     let obj ← getParam! params 0
-    let isSingleThreaded ← call (← getLeanIsScalar) obj >>= likely
+    let isSingleThreaded ← call (← getLeanIsST) obj >>= likely
     mkIfBranch blk isSingleThreaded
       (fun then_ => do
         let ty ← getLeanObject
@@ -457,7 +478,7 @@ def getLeanMkStringFromBytes : CodegenM Func := do
 
 def getLeanSetSTHeader : CodegenM Func := do
   let unsigned ← unsigned
-  mkFunction "lean_set_st_header" (← void) 
+  mkFunction "lean_set_st_header" (← void)
     #[((← «lean_object*»), "o"), (unsigned, "tag"), (unsigned, "other")] fun blk params => do
     let o ← getParam! params 0
     let object ← getLeanObject
@@ -476,7 +497,7 @@ def getLeanSetSTHeader : CodegenM Func := do
 def getLeanAllocCtor : CodegenM Func := do
   let unsigned ← unsigned
   let size_t ← size_t
-  mkFunction "lean_alloc_ctor" (← «lean_object*») 
+  mkFunction "lean_alloc_ctor" (← «lean_object*»)
     #[(unsigned, "tag"), (unsigned, "num_objs"), (unsigned, "scalar_sz")] fun blk params => do
     let tag ← getParam! params 0
     -- TODO: use sizeof once supported
@@ -550,7 +571,7 @@ def getLeanCtorGetUsize  : CodegenM Func := do
   mkFunction s!"lean_ctor_get_usize" size_t #[(objPtr, "o"), (← unsigned, "i")] fun blk params => do
     let o ← getParam! params 0
     let base ← call (← getLeanCtorObjCPtr) o >>= (bitcast · (← size_t.getPointer))
-    mkReturn blk $ ← mkArrayAccess base (← getParam! params 1) 
+    mkReturn blk $ ← mkArrayAccess base (← getParam! params 1)
 
 def getLeanUnboxAux (name : String) (ty : JitType) : CodegenM Func := do
   mkFunction s!"lean_unbox_{name}" ty #[(← «lean_object*», "o")] fun blk params => do
@@ -684,9 +705,9 @@ def getLeanCtorRelease : CodegenM Func := do
     let access ← mkArrayAccess (← call (← getLeanCtorObjCPtr) o) i
     mkAssignment blk obj $ ← access.getAddress none
     let obj ← obj.asRValue
-    mkEval blk $ 
+    mkEval blk $
       ← call (← getLeanDec) (← obj.dereference none)
-    mkAssignment blk (← obj.dereference none) $ 
+    mkAssignment blk (← obj.dereference none) $
       ← call (← getLeanBox) (← constantZero (← size_t))
     blk.endWithVoidReturn none
 
@@ -732,7 +753,7 @@ def getLeanUnsignedToNat : CodegenM Func := do
     let i ← getParam! params 0
     mkReturn blk $ (← call (← getLeanUsizeToNat) (← i ::: (← size_t)))
 
-def getLeanUint64ToNat : CodegenM Func := do
+def getLeanUInt64ToNat : CodegenM Func := do
   let uint64_t ← uint64_t
   mkFunction "lean_uint64_to_nat" (← «lean_object*») #[((uint64_t), "i")] fun blk params => do
     let i ← getParam! params 0
@@ -756,7 +777,7 @@ def dispatchSignedOverflow (op: String) : CodegenM (Func × JitType) := do
   let int ← int
   if (← int.getSize) == size_t_size then
     return (← getBuiltinFunc s!"__builtin_s{op}_overflow", int)
-  else do 
+  else do
     let long ← ctx.getType TypeEnum.Long
     if (← long.getSize) == size_t_size then
       return (← getBuiltinFunc s!"__builtin_s{op}l_overflow", long)
@@ -767,13 +788,13 @@ def dispatchSignedOverflow (op: String) : CodegenM (Func × JitType) := do
       else
         throw "Unsupported size_t type"
 
-def dispatchOverflowBuiltin (op: String) : CodegenM (Func × JitType) := do 
+def dispatchOverflowBuiltin (op: String) : CodegenM (Func × JitType) := do
   let ctx ← getCtx
   let size_t ← size_t
   let unsigned ← unsigned
   if ← unsigned.isCompatibleWith size_t then
     return (← getBuiltinFunc s!"__builtin_u{op}_overflow", unsigned)
-  else do 
+  else do
     let ulong ← ctx.getType TypeEnum.UnsignedLong
     if ← ulong.isCompatibleWith size_t then
       return (← getBuiltinFunc s!"__builtin_u{op}l_overflow", ulong)
@@ -792,10 +813,10 @@ def overflowCheck [AsRValue τ₁]  [AsRValue τ₂] (dispatch : String → Code
   let address ← result.getAddress none
   let overflow ← call func (x, y, address)
   pure (result, overflow)
-      
-def getLeanNatBinOp 
-  (name : String) 
-  (fastpath: Block → LeanGccJit.Core.Param → LeanGccJit.Core.Param → CodegenM Unit) 
+
+def getLeanNatBinOp
+  (name : String)
+  (fastpath: Block → LeanGccJit.Core.Param → LeanGccJit.Core.Param → CodegenM Unit)
   (isCompare: Bool := False) : CodegenM Func := do
   let retTy ← if isCompare then uint8_t else «lean_object*»
   mkFunction s!"lean_nat_{name}" retTy #[((← «lean_object*»), "a"), ((← «lean_object*»), "b")] fun blk params => do
@@ -810,7 +831,7 @@ def getLeanNatBinOp
         mkReturn else_ (← call (← getLeanNatBigBinOp name isCompare) (a, b))
       )
 
-def getLeanNatAdd : CodegenM Func := 
+def getLeanNatAdd : CodegenM Func :=
   getLeanNatBinOp "add" fun blk a b => do
     let size_t ← size_t
     let one ← constantOne size_t
@@ -828,7 +849,7 @@ def getLeanNatAdd : CodegenM Func :=
         mkReturn else_ $ ← result ::! (←«lean_object*»)
       )
 
-def getLeanNatSub : CodegenM Func := 
+def getLeanNatSub : CodegenM Func :=
   getLeanNatBinOp "sub" fun blk a b => do
     let size_t ← size_t
     let one ← constantOne size_t
@@ -837,7 +858,7 @@ def getLeanNatSub : CodegenM Func :=
     let (result, overflow) ← overflowCheck dispatchOverflowBuiltin blk "result" a "sub" b
     let overflow ← unlikely overflow
     mkIfBranch blk overflow
-      (fun then_ => do 
+      (fun then_ => do
         let unit ← call (← getLeanBox) (← constantZero size_t)
         mkReturn then_ unit
       )
@@ -872,9 +893,21 @@ def getLeanNatLt : CodegenM Func :=
     let cmp ← a <<· b
     mkReturn blk $ ← cmp ::! (← uint8_t)
 
+def getLeanNatLe : CodegenM Func :=
+  getLeanNatBinOp "le" (isCompare := true) fun blk a b => do
+    let size_t ← size_t
+    let a ← a ::! size_t
+    let b ← b ::! size_t
+    let cmp ← a <== b
+    mkReturn blk $ ← cmp ::! (← uint8_t)
+
 def getLeanNatDecLt : CodegenM Func := do
   mkFunction "lean_nat_dec_lt" (← uint8_t) #[((← «lean_object*»), "a"), ((← «lean_object*»), "b")] fun blk params => do
     mkReturn blk $ ← call (← getLeanNatLt) (← getParam! params 0, ← getParam! params 1)
+
+def getLeanNatDecLe : CodegenM Func := do
+  mkFunction "lean_nat_dec_le" (← uint8_t) #[((← «lean_object*»), "a"), ((← «lean_object*»), "b")] fun blk params => do
+    mkReturn blk $ ← call (← getLeanNatLe) (← getParam! params 0, ← getParam! params 1)
 
 def getLeanNatLAnd : CodegenM Func := do
   let obj_ptr ← «lean_object*»
@@ -916,6 +949,20 @@ def getLeanNatDiv : CodegenM Func := do
         mkReturn else_ $ ← call (← getLeanBox) div
       )
 
+def getLeanNatMod : CodegenM Func := do
+  getLeanNatBinOp "mod" fun blk a b => do
+    let a' ← call (← getLeanUnbox) a
+    let b' ← call (← getLeanUnbox) b
+    let isZero ← unlikely $ ← b' === (0 : UInt64)
+    mkIfBranch blk isZero
+      (fun then_ => do
+        mkReturn then_ a
+      )
+      (fun else_ => do
+        let rem ← a' % b'
+        mkReturn else_ $ ← call (← getLeanBox) rem
+      )
+
 def getLeanNatOverflowMul : CodegenM Func := do
   importFunction "lean_nat_overflow_mul" (← «lean_object*») #[((← size_t), "a"), (← size_t, "b")]
 
@@ -944,7 +991,7 @@ def getLeanNatMul : CodegenM Func := do
 def Constant.__ATOMIC_SEQ_CST : CodegenM RValue := do
   mkConstant (← int) 5
 
-def getLeanThunkGet' : CodegenM Func := do 
+def getLeanThunkGet' : CodegenM Func := do
   let obj_ptr ← «lean_object*»
   mkFunction "__lean_gccjit_thunk_get" obj_ptr #[(obj_ptr, "o")] fun blk params => do
     let o ← getParam! params 0
@@ -958,8 +1005,197 @@ def getLeanThunkGet' : CodegenM Func := do
     let seqCst ← Constant.__ATOMIC_SEQ_CST
     let value ← call load (src, seqCst)
     mkReturn blk $ ← value ::! retTy
-    
-def populateRuntimeTable : CodegenM Unit := do
+
+def dispatchPlainType (x : String) : CodegenM JitType :=
+  match x with
+  | "uint8" => uint8_t
+  | "uint16" => uint16_t
+  | "uint32" => uint32_t
+  | "uint64" => uint64_t
+  | "usize" => size_t
+  | _ => throw "Unsupported type"
+
+def dispatchSafeDiv (x: String) : CodegenM Func := do
+  let ty ← dispatchPlainType x
+  mkFunction s!"__lean_gccjit_safe_div_{x}" ty #[(ty, "a"), (ty, "b")] fun blk params => do
+    let a ← getParam! params 0
+    let b ← getParam! params 1
+    let isZero ← unlikely $ ← b === (0 : UInt64)
+    mkIfBranch blk isZero
+      (fun then_ => do
+        mkReturn then_ $ ← constantZero ty
+      )
+      (fun else_ => do
+        mkReturn else_ $ ← a / b
+      )
+
+def dispatchSafeMod (x: String) : CodegenM Func := do
+  let ty ← dispatchPlainType x
+  mkFunction s!"__lean_gccjit_safe_mod_{x}" ty #[(ty, "a"), (ty, "b")] fun blk params => do
+    let a ← getParam! params 0
+    let b ← getParam! params 1
+    let isZero ← unlikely $ ← b === (0 : UInt64)
+    mkIfBranch blk isZero
+      (fun then_ => do
+        mkReturn then_ a
+      )
+      (fun else_ => do
+        mkReturn else_ $ ← a % b
+      )
+
+def dispatchPlainBinExpr [AsRValue α] [AsRValue β] (ty: String) (x : α) (y : β) (op : String) : CodegenM RValue :=
+  match op with
+  | "add" => x + y
+  | "sub" => x - y
+  | "mul" => x * y
+  | "div" => do
+    call (← dispatchSafeDiv ty) (x, y)
+  | "mod" => do
+    call (← dispatchSafeMod ty) (x, y)
+  | "land" => x &&& y
+  | "lor" => x ||| y
+  | "xor" => x ^^^ y
+  | "shift_left" => do
+    let size ← dispatchPlainType ty >>= (·.getSize)
+    x <<< (← y % (size * 8).toUInt64)
+  | "shift_right" => do
+    let size ← dispatchPlainType ty >>= (·.getSize)
+    x >>> (← y % (size * 8).toUInt64)
+  | _ => throw "Unsupported operation"
+
+def dispatchPlainBinOpFunc (ty: String) (op : String) : CodegenM Func := do
+  let t ← dispatchPlainType ty
+  mkFunction s!"lean_{ty}_{op}" t #[(t, "a"), (t, "b")] fun blk params => do
+    let a ← getParam! params 0
+    let b ← getParam! params 1
+    mkReturn blk $ ← dispatchPlainBinExpr ty a b op
+
+def dispatchPlainCmpExpr [AsRValue α] [AsRValue β] (x : α) (y : β) (op : String) : CodegenM RValue :=
+  match op with
+  | "eq" => x === y
+  | "lt" => x <<· y
+  | "le" => x <== y
+  | _ => throw "Unsupported operation"
+
+def dispatchPlainDecCmpFunc (ty: String) (op : String) : CodegenM Func := do
+  let t ← dispatchPlainType ty
+  let u8 ← uint8_t
+  mkFunction s!"lean_{ty}_dec_{op}" u8 #[(t, "a"), (t, "b")] fun blk params => do
+    let a ← getParam! params 0
+    let b ← getParam! params 1
+    mkReturn blk $ ← dispatchPlainCmpExpr a b op >>= (· ::: u8)
+
+def dispatchBuiltinClz (ty : JitType) : CodegenM (Func × JitType) := do
+  let ctx ← getCtx
+  let size ← ty.getSize
+  let uint ← ctx.getType TypeEnum.UnsignedInt
+  if size <= (← uint.getSize) then do
+    return (← getBuiltinFunc "__builtin_clz", uint)
+  else do
+    let ulong ← ctx.getType TypeEnum.UnsignedLong
+    if size <= (← ulong.getSize) then do
+      return (← getBuiltinFunc "__builtin_clzl", ulong)
+    else do
+      let ulonglong ← ctx.getType TypeEnum.UnsignedLongLong
+      if size <= (← ulonglong.getSize) then do
+        return (← getBuiltinFunc "__builtin_clzll", ulonglong)
+      else
+        throw "Unsupported type"
+
+def dispatchLog2 (ty: String) : CodegenM Func := do
+  let t ← dispatchPlainType ty
+  mkFunction s!"lean_{ty}_log2" t #[(t, "a")] fun blk params => do
+    let a ← getParam! params 0
+    let (func, intermidiate) ← dispatchBuiltinClz t
+    let intermidiateSize ← intermidiate.getSize
+    let mask := intermidiateSize.toUInt64 * 8 - 1
+    let a ← a ::: intermidiate
+    let isZero ← unlikely $ ← a === (0 : UInt64)
+    mkIfBranch blk isZero
+      (fun then_ => do
+        mkReturn then_ $ ← constantZero t
+      )
+      (fun else_ => do
+        let clz ← call func a
+        let log2 ← clz ^^^ mask
+        mkReturn else_ $ ← log2 ::: t
+      )
+def dispatchSmallIntegralToNat (ty : String) : CodegenM Func := do
+  let t ← dispatchPlainType ty
+  let usizeToNat ← getLeanUsizeToNat
+  mkFunction s!"lean_{ty}_to_nat" (← «lean_object*») #[(t, "a")] fun blk params => do
+    let a ← getParam! params 0
+    let a' ← a ::: (← size_t)
+    mkReturn blk $ ← call usizeToNat a'
+
+def dispatchOfNat  (ty : String) : CodegenM Unit := do
+  let t ← dispatchPlainType ty
+  let ofBigNat ← importFunction s!"lean_{ty}_of_big_nat" t #[((← «lean_object*»), "a")]
+  let leanIsScalar ← getLeanIsScalar
+  let borrowFunc ← mkFunction s!"lean_{ty}_of_nat" t #[(← «lean_object*», "a")] fun blk params => do
+    let a ← getParam! params 0
+    let isSmall ← call leanIsScalar a >>= likely
+    mkIfBranch blk isSmall
+      (fun then_ => do
+        let unboxed ← call (← getLeanUnbox) a
+        mkReturn then_ $ ← unboxed ::: t
+      )
+      (fun else_ => do
+        mkReturn else_ $ ← call ofBigNat a
+      )
+  discard $  mkFunction s!"lean_{ty}_of_nat_mk" t #[(← «lean_object*», "a")] fun blk params => do
+    let a ← getParam! params 0
+    let res ← mkLocalVar blk t "res"
+    mkAssignment blk res $ ← call borrowFunc a
+    mkEval blk $ ← call (← getLeanDec) a
+    mkReturn blk res
+
+def registerBuiltinFunc (f : String) : CodegenM Unit := do
+  let builtin ← getBuiltinFunc f
+  modify fun s => { s with funcMap := s.funcMap.insert f builtin }
+
+def getLeanAllocArray : CodegenM Func := do
+  let size_t ← size_t
+  let obj_ptr ← «lean_object*»
+  mkFunction "lean_alloc_array" obj_ptr #[(size_t, "size"), (size_t, "capacity")] fun blk params => do
+    let size ← getParam! params 0
+    let capacity ← getParam! params 1
+    let ptrSize ← size_t.getSize >>= (pure ·.toUInt64)
+    let arrayHeaderSize := 3 * ptrSize
+    let allocSize ← (← capacity * ptrSize) + arrayHeaderSize
+    let obj ← mkLocalVar blk obj_ptr "obj"
+    let arr@(st, _) ← getLeanArrayObject
+    let leanArrayObjPtr ← st.asJitType >>= (·.getPointer)
+    mkAssignment blk obj $ ← call (← getLeanAllocObject) allocSize
+    let tag ← mkConstant (← unsigned) Constant.LeanArray
+    let other ← mkConstant (← unsigned) 0
+    mkEval blk $ ← call (← getLeanSetSTHeader) (obj, tag, other)
+    let obj' ← obj ::: leanArrayObjPtr
+    let m_size ← dereferenceField obj' arr 1
+    let m_capacity ← dereferenceField obj' arr 2
+    mkAssignment blk m_size size
+    mkAssignment blk m_capacity capacity
+    mkReturn blk obj
+
+def getLeanMkEmptyArrayWithCapacity : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  mkFunction "lean_mk_empty_array_with_capacity" obj_ptr #[⟨ obj_ptr, "capacity" ⟩] fun blk params => do
+    let capacity ← getParam! params 0
+    let isScalar ← call (← getLeanIsScalar) capacity >>= likely
+    mkIfBranch blk isScalar
+      (fun then_ => do
+        let capacity ← call (← getLeanUnbox) capacity
+        let size ← mkConstant (← size_t) 0
+        mkReturn then_ $ ← call (← getLeanAllocArray) (size, capacity)
+      )
+      (fun else_ => do
+        let null ← getCtx >>= (·.null obj_ptr)
+        mkEval else_ $ ← call (← getLeanInternalPanicOutOfMemory) ()
+        mkEval else_ $ ← call (← getBuiltinFunc "__builtin_unreachable") ()
+        mkReturn else_ null
+      )
+
+def registerBasicFunctions : CodegenM Unit := do
     discard getLeanIsScalar
     discard getLeanBox
     discard getLeanUnbox
@@ -1014,6 +1250,8 @@ def populateRuntimeTable : CodegenM Unit := do
     discard getLeanMarkMT
     discard getLeanMarkPersistent
     discard getLeanSetSTHeader
+
+def registerCtorFunctions : CodegenM Unit := do
     discard getLeanCtorObjCPtr
     discard getLeanAllocCtor
     discard getLeanCtorGet
@@ -1032,17 +1270,21 @@ def populateRuntimeTable : CodegenM Unit := do
     discard $ getLeanCtorSetAux "uint32" (← uint32_t)
     discard $ getLeanCtorSetAux "uint64" (← uint64_t)
     discard $ getLeanCtorSetAux "float" (← double)
+
+def registerClosureFunctions : CodegenM Unit := do
     discard getLeanAllocClosure
     discard getLeanClosureSet
     (16 : Nat).forM fun i => do
       discard $ getLeanApply i
     discard getLeanApplyM
+
+def registerNatFunctions : CodegenM Unit := do
     discard getLeanCStrToNat
     discard getLeanBigUSizeToNat
     discard getLeanBigUInt64ToNat
     discard getLeanUsizeToNat
     discard getLeanUnsignedToNat
-    discard getLeanUint64ToNat
+    discard getLeanUInt64ToNat
     discard $ getLeanNatBigBinOp "add"
     discard $ getLeanNatBigBinOp "sub"
     discard $ getLeanNatBigBinOp "mul"
@@ -1059,8 +1301,180 @@ def populateRuntimeTable : CodegenM Unit := do
     discard getLeanNatDecEq
     discard getLeanNatLt
     discard getLeanNatDecLt
+    discard getLeanNatLe
+    discard getLeanNatDecLe
     discard getLeanNatLAnd
     discard getLeanNatDiv
+    discard getLeanNatMod
     discard getLeanNatOverflowMul
     discard getLeanNatMul
+
+def registerUnsignedFunctions : CodegenM Unit := do
+    for ty in #["uint8", "uint16", "uint32", "uint64", "usize"] do
+      for op in #["add", "sub", "mul", "div", "mod", "land", "lor", "xor", "shift_left", "shift_right"] do
+        discard $ dispatchPlainBinOpFunc ty op
+      for cmp in #["eq", "lt", "le"] do
+        discard $ dispatchPlainDecCmpFunc ty cmp
+      discard $ dispatchLog2 ty
+      dispatchOfNat ty
+      if ty != "uint64" && ty != "usize" then
+        discard $ dispatchSmallIntegralToNat ty
+
+def getLeanArraySetPanic : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  importFunction "lean_array_set_panic" obj_ptr #[(obj_ptr, "a"), (obj_ptr, "v")]
+
+def getLeanArrayGetPanic : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  importFunction "lean_array_get_panic" obj_ptr #[(obj_ptr, "def_val")]
+
+def getLeanArraySize : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  mkFunction "lean_array_size" (← size_t) #[(obj_ptr, "a")] fun blk params => do
+    let a ← getParam! params 0
+    let st@(ty, _) ← getLeanArrayObject
+    let a ← a ::: (← ty.asJitType >>= (·.getPointer))
+    let size ← dereferenceField a st 1
+    mkReturn blk size
+
+def getLeanArrayGetSize : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  mkFunction "lean_array_get_size" obj_ptr #[(obj_ptr, "a")] fun blk params => do
+    let a ← getParam! params 0
+    let size ← call (← getLeanArraySize) a
+    mkReturn blk $ ← call (← getLeanBox) size
+
+def getLeanCopyExpandArray : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  importFunction "lean_copy_expand_array" obj_ptr #[(obj_ptr, "a"), (← bool, "expand")]
+
+def withAssumption [AsRValue τ₁] [AsRValue τ₂] (ret: Option τ₁) (blk: Block) (x : τ₂) (body: Block → CodegenM Unit) : CodegenM Unit := do
+  mkIfBranch blk x
+    body
+    (fun else_ => do
+      let unreachable ← getBuiltinFunc "__builtin_unreachable"
+      mkEval else_ $ ← call unreachable ()
+      match ret with
+      | none => else_.endWithVoidReturn none
+      | some ret => mkReturn else_ ret
+    )
+
+def getLeanEnsureExclusiveArray : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  mkFunction "lean_ensure_exclusive_array" obj_ptr #[(obj_ptr, "a")] fun blk params => do
+    let a ← getParam! params 0
+    let isExclusive ← call (← getLeanIsExclusive) a >>= likely
+    mkIfBranch blk isExclusive
+      (fun then_ => do
+        mkReturn then_ a
+      )
+      (fun else_ => do
+        let falseValue ← constantZero (← bool)
+        let sizeExpr ← call (← getLeanArraySize) a
+        let oldSize ← mkLocalVar else_ (← size_t) "old_size"
+        mkAssignment else_ oldSize sizeExpr
+        mkAssignment else_ a $ ← call (← getLeanCopyExpandArray) (a, falseValue)
+        withAssumption (some a) else_ isExclusive fun else_ => do
+          withAssumption (some a) else_ (← oldSize === sizeExpr) fun else_ => do
+            mkReturn else_ a
+      )
+
+def getLeanArrayUSet : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  let size_t ← size_t
+  mkFunction "lean_array_uset" obj_ptr #[(obj_ptr, "a"), (size_t, "i"), (obj_ptr, "v")] fun blk params => do
+    let a ← getParam! params 0
+    let i ← getParam! params 1
+    let v ← getParam! params 2
+    mkAssignment blk a $ ← call (← getLeanEnsureExclusiveArray) a
+    let st@(ty, _) ← getLeanArrayObject
+    let a' ← a ::: (← ty.asJitType >>= (·.getPointer))
+    let m_data ← dereferenceField a' st 3
+    let target ← mkLocalVar blk (←obj_ptr.getPointer) "target"
+    mkAssignment blk target $ ← mkArrayAccess m_data i >>= (·.getAddress none)
+    mkEval blk $ ← call (← getLeanDec) (←dereference target)
+    mkAssignment blk (←dereference target) v
+    mkReturn blk a
+
+def getLeanArrayUGet : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  let size_t ← size_t
+  mkFunction "lean_array_uget" obj_ptr #[(obj_ptr, "a"), (size_t, "i")] fun blk params => do
+    let a ← getParam! params 0
+    let i ← getParam! params 1
+    let st@(ty, _) ← getLeanArrayObject
+    let a' ← a ::: (← ty.asJitType >>= (·.getPointer))
+    let m_data ← dereferenceField a' st 3
+    let target ← mkLocalVar blk obj_ptr "target"
+    mkAssignment blk target $ ← mkArrayAccess m_data i
+    mkEval blk $ ← call (← getLeanInc) target
+    mkReturn blk target
+
+def getLeanArraySet : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  mkFunction "lean_array_set" obj_ptr #[(obj_ptr, "a"), (obj_ptr, "i"), (obj_ptr, "v")] fun blk params => do
+    let a ← getParam! params 0
+    let i ← getParam! params 1
+    let v ← getParam! params 2
+    let func ← blk.getFunction
+    let panic ← func.newBlock "panic"
+    let checked ← func.newBlock "checked"
+    panic.endWithReturn none $ ← call (← getLeanArraySetPanic) (a, v)
+    let isScalar ← call (← getLeanIsScalar) i >>= likely
+    let ifScalar ← func.newBlock "scalar"
+    blk.endWithConditional none isScalar ifScalar panic
+    -- Scalar Case
+    let idx ← mkLocalVar ifScalar (← size_t) "idx"
+    mkAssignment ifScalar idx $ ← call (← getLeanUnbox) i
+    let size ← call (← getLeanArraySize) a
+    let isOOB ← unlikely $ ← idx >== size
+    ifScalar.endWithConditional none isOOB panic checked
+    -- Checked Case
+    mkReturn checked $ ← call (← getLeanArrayUSet) (a, idx, v)
+
+def getLeanArrayGet : CodegenM Func := do
+  let obj_ptr ← «lean_object*»
+  mkFunction "lean_array_get" obj_ptr #[(obj_ptr, "def_val"), (obj_ptr, "a"), (obj_ptr, "i")] fun blk params => do
+    let def_val ← getParam! params 0
+    let a ← getParam! params 1
+    let i ← getParam! params 2
+    let func ← blk.getFunction
+    let panic ← func.newBlock "panic"
+    let checked ← func.newBlock "checked"
+    panic.endWithReturn none $ ← call (← getLeanArrayGetPanic) def_val
+    let isScalar ← call (← getLeanIsScalar) i >>= likely
+    let ifScalar ← func.newBlock "scalar"
+    blk.endWithConditional none isScalar ifScalar panic
+    -- Scalar Case
+    let idx ← mkLocalVar ifScalar (← size_t) "idx"
+    mkAssignment ifScalar idx $ ← call (← getLeanUnbox) i
+    let size ← call (← getLeanArraySize) a
+    let isOOB ← unlikely $ ← idx >== size
+    ifScalar.endWithConditional none isOOB panic checked
+    -- Checked Case
+    mkReturn checked $ ← call (← getLeanArrayUGet) (a, idx)
+
+def registerMathKernels: CodegenM Unit := do
+    registerBuiltinFunc "cos"
+    registerBuiltinFunc "sin"
+
+def registerThunkFunctions : CodegenM Unit := do
     discard getLeanThunkGet'
+
+def regiterArrayFunctions : CodegenM Unit := do
+    discard getLeanMkEmptyArrayWithCapacity
+    discard getLeanArrayUSet
+    discard getLeanArraySet
+    discard getLeanArrayUGet
+    discard getLeanArrayGet
+    discard getLeanArrayGetSize
+
+def populateRuntimeTable : CodegenM Unit := do
+    registerBasicFunctions
+    registerCtorFunctions
+    registerClosureFunctions
+    registerNatFunctions
+    registerUnsignedFunctions
+    registerMathKernels
+    registerThunkFunctions
+    regiterArrayFunctions

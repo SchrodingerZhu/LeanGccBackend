@@ -17,5 +17,8 @@ def main (args: List String) : IO Unit := do
     let inputPath := args[0]!
     let outputPath := args[1]!
     let src ← IO.FS.readFile inputPath
-    let (env, _) ← Lean.Elab.runFrontend src {} inputPath `Main
-    GccJit.emitGccJit env `Main outputPath
+    let dumpGimple := match ← IO.getEnv "DUMP_GIMPLE" with
+      | some "true" => true
+      | _ => false
+    let (env, _) ← Lean.Elab.runFrontend src { } inputPath `Main
+    GccJit.emitGccJit env `Main outputPath { dumpGimple }
