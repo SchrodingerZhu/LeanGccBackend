@@ -255,7 +255,7 @@ def getLeanIsPersistent : CodegenM Func := do
     mkReturn blk $ (← res === (0 : UInt64))
 
 def getLeanHasRc : CodegenM Func := do
-  mkFunction "lean_is_persistent" (← bool) #[((← «lean_object*»), "o")] fun blk params => do
+  mkFunction "lean_has_rc" (← bool) #[((← «lean_object*»), "o")] fun blk params => do
     let obj ← getParam! params 0
     let ty ← getLeanObject
     let res ← (← dereferenceField obj ty 0) ::: (← int)
