@@ -685,7 +685,7 @@ def emitUnreachable (panic : Bool := true) : FuncM Unit := do
   mkReturnM $ ← fakeDefaultReturn
 
 def emitInc (x : VarId) (n : Nat) (check : Bool) : FuncM Unit := do
-  unless n > 0 do
+  if n > 0 then do
     let x ← getIndexVar x
     if check then do
       if n == 1 then do
@@ -775,13 +775,13 @@ partial def declareVars (f : FnBody) : FuncM Unit := do
   | e => do
       if e.isTerminal then pure () else declareVars e.body
 
-def emitPrintf (typeId : Name) (x : VarId) (tag: RValue) : FuncM Unit := do
-  let printf ← getBuiltinFunc "printf"
-  let state ← get
-  let format := s!"switch {typeId}'s ctor at {x} in {state.decl.map (·.name)}, value: %d\n"
-  let format := format.push ⟨0, by decide⟩
-  let format ← emitCStringLit format
-  mkEvalM $ ←call printf (format, tag)
+-- def emitPrintf (typeId : Name) (x : VarId) (tag: RValue) : FuncM Unit := do
+--   let printf ← getBuiltinFunc "printf"
+--   let state ← get
+--   let format := s!"switch {typeId}'s ctor at {x} in {state.decl.map (·.name)}, value: %d\n"
+--   let format := format.push ⟨0, by decide⟩
+--   let format ← emitCStringLit format
+--   mkEvalM $ ←call printf (format, tag)
 
 mutual
 partial def emitFnBody (b : FnBody) : FuncM Unit := do
@@ -799,10 +799,8 @@ partial def emitJoinPoint (j : JoinPointId) (v : FnBody) : FuncM Unit := do
 partial def emitCase (typeId : Name) (x : VarId) (ty: IRType) (alts: Array Alt) : FuncM Unit := do
   currentBlock >>= (·.addComment none s!"case of {typeId}")
   let cursor ← currentBlock
-  let id := x
   let x ← getIndexVar x
   let tag ← getTag ty x
-  emitPrintf typeId id tag
   let mut cases := #[]
   let mut fallback := none
   let ctx ← getCtx

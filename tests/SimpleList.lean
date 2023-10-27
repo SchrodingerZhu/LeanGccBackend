@@ -1,6 +1,3 @@
-
-set_option trace.compiler.ir.result true
-
 def main (x: List String) : IO Unit := do
   let mut arr := [0, 0, 0, 0, 0, 0, 0]
   match x with

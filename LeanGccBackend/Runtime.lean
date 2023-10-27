@@ -272,15 +272,22 @@ def getLeanIncRef : CodegenM Func := do
     let obj ← getParam! params 0
     let ty ← getLeanObject
     let isSingleThreaded ← call (← getLeanIsST) obj >>= likely
+    let m_rc ← dereferenceField obj ty 0
     mkIfBranch blk isSingleThreaded
       (fun then_ => do
-        let m_rc ← dereferenceField obj ty 0
         mkAssignmentOp then_ BinaryOp.Plus m_rc (← constantOne (← int))
         then_.endWithVoidReturn none
       )
       (fun else_ => do
-        mkEval else_ $ (← call (← getLeanIncRefCold) obj)
-        else_.endWithVoidReturn none
+        let isPersistent ← (m_rc === (0 : UInt64))
+        mkIfBranch else_ isPersistent
+          (fun then_ => do
+            then_.endWithVoidReturn none
+          )
+          (fun else_ => do
+            mkEval else_ $ (← call (← getLeanIncRefCold) obj)
+            else_.endWithVoidReturn none
+          )
       )
 
 def getLeanIncRefN : CodegenM Func := do
@@ -289,15 +296,22 @@ def getLeanIncRefN : CodegenM Func := do
     let n ← getParam! params 1
     let ty ← getLeanObject
     let isSingleThreaded ← call (← getLeanIsST) obj >>= likely
+    let m_rc ← dereferenceField obj ty 0
     mkIfBranch blk isSingleThreaded
       (fun then_ => do
-        let m_rc ← dereferenceField obj ty 0
         mkAssignmentOp then_ BinaryOp.Plus m_rc (← n ::: (← int))
         then_.endWithVoidReturn none
       )
       (fun else_ => do
-        mkEval else_ $ (← call (← getLeanIncRefNCold) (obj, n))
-        else_.endWithVoidReturn none
+        let isPersistent ← (m_rc === (0 : UInt64))
+        mkIfBranch else_ isPersistent
+          (fun then_ => do
+            then_.endWithVoidReturn none
+          )
+          (fun else_ => do
+            mkEval else_ $ (← call (← getLeanIncRefNCold) (obj, n))
+            else_.endWithVoidReturn none
+          )
       )
 
 def getLeanDecRefCold : CodegenM Func := do
@@ -315,8 +329,15 @@ def getLeanDecRef : CodegenM Func := do
         then_.endWithVoidReturn none
       )
       (fun else_ => do
-        mkEval else_ $ (← call (← getLeanDecRefCold) obj)
-        else_.endWithVoidReturn none
+        let isPersistent ← (m_rc === (0 : UInt64))
+        mkIfBranch else_ isPersistent
+          (fun then_ => do
+            then_.endWithVoidReturn none
+          )
+          (fun else_ => do
+            mkEval else_ $ (← call (← getLeanDecRefCold) obj)
+            else_.endWithVoidReturn none
+          )
       )
 
 private def ifNotScalar (name : String)  (onNotScalar : Block → Array LeanGccJit.Core.Param → CodegenM Unit) (extraParam : Array (JitType × String) := #[]) : CodegenM Func := do
