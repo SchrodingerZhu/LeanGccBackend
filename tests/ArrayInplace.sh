@@ -1,0 +1,10 @@
+SYSTEM=$1
+GCCJIT=$2
+
+
+SYSTEM_RESULT=$(./$SYSTEM)
+GCCJIT_RESULT=$(./$GCCJIT)
+if [ "$SYSTEM_RESULT" != "$GCCJIT_RESULT" ]; then
+  echo "Error: $SYSTEM_RESULT != $GCCJIT_RESULT"
+  exit 1
+fi
