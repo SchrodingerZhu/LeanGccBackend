@@ -1154,6 +1154,33 @@ def registerBuiltinFunc (f : String) : CodegenM Unit := do
   let builtin ← getBuiltinFunc f
   modify fun s => { s with funcMap := s.funcMap.insert f builtin }
 
+def withAssumption [AsRValue τ₁] [AsRValue τ₂] (ret: Option τ₁) (blk: Block) (x : τ₂) (body: Block → CodegenM Unit) : CodegenM Unit := do
+  mkIfBranch blk x
+    body
+    (fun else_ => do
+      let unreachable ← getBuiltinFunc "__builtin_unreachable"
+      mkEval else_ $ ← call unreachable ()
+      match ret with
+      | none => else_.endWithVoidReturn none
+      | some ret => mkReturn else_ ret
+    )
+
+def registerLeanArrayPush : CodegenM Unit := do
+  let ctx ← getCtx
+  let obj_ptr ← «lean_object*»
+  let a ← ctx.newParam none obj_ptr "a"
+  let v ← ctx.newParam none obj_ptr "v"
+  let external ← ctx.newFunction none FunctionKind.Imported obj_ptr "lean_array_push" #[a, v] false
+  let func ← mkFunction "__lean_gccjit_array_push" obj_ptr #[(obj_ptr, "a"), (obj_ptr, "v")] (kind := FunctionKind.AlwaysInline) fun blk params => do
+    let a ← getParam! params 0
+    let v ← getParam! params 1
+    let st ← getLeanObject
+    mkAssignment blk a $ ← call external (a, v)
+    let m_rc ← dereferenceField a st 0
+    withAssumption (some a) blk (← m_rc === (1 : UInt64)) fun body => do
+      mkReturn body a
+  modify fun s => { s with funcMap := s.funcMap.insert "lean_array_push" func }
+
 def getLeanAllocArray : CodegenM Func := do
   let size_t ← size_t
   let obj_ptr ← «lean_object*»
@@ -1348,17 +1375,6 @@ def getLeanCopyExpandArray : CodegenM Func := do
   let obj_ptr ← «lean_object*»
   importFunction "lean_copy_expand_array" obj_ptr #[(obj_ptr, "a"), (← bool, "expand")]
 
-def withAssumption [AsRValue τ₁] [AsRValue τ₂] (ret: Option τ₁) (blk: Block) (x : τ₂) (body: Block → CodegenM Unit) : CodegenM Unit := do
-  mkIfBranch blk x
-    body
-    (fun else_ => do
-      let unreachable ← getBuiltinFunc "__builtin_unreachable"
-      mkEval else_ $ ← call unreachable ()
-      match ret with
-      | none => else_.endWithVoidReturn none
-      | some ret => mkReturn else_ ret
-    )
-
 def getLeanEnsureExclusiveArray : CodegenM Func := do
   let obj_ptr ← «lean_object*»
   mkFunction "lean_ensure_exclusive_array" obj_ptr #[(obj_ptr, "a")] fun blk params => do
@@ -1469,6 +1485,7 @@ def regiterArrayFunctions : CodegenM Unit := do
     discard getLeanArrayUGet
     discard getLeanArrayGet
     discard getLeanArrayGetSize
+    registerLeanArrayPush
 
 def populateRuntimeTable : CodegenM Unit := do
     registerBasicFunctions
