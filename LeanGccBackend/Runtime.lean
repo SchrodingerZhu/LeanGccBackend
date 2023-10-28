@@ -508,7 +508,7 @@ def getLeanAllocCtor : CodegenM Func := do
     let memory ← mkLocalVar blk (← «lean_object*») "memory"
     let size ← (← ptrSize * (← numObjs ::: size_t)) + (← (← leanCtorObjectSize ::: size_t) + (← scalarSz ::: size_t))
     mkAssignment blk memory $ (← call (← getLeanAllocCtorMemory) size)
-    mkEval blk $ (← call (← getLeanSetSTHeader) (memory, tag, (← constantZero unsigned)))
+    mkEval blk $ (← call (← getLeanSetSTHeader) (memory, tag, numObjs))
     mkReturn blk memory
 
 def getLeanCtorObjCPtr : CodegenM Func := do
