@@ -428,6 +428,13 @@ def getLeanIsExclusive : CodegenM Func := do
         mkReturn else_ (← constantZero (← bool))
       )
 
+def getLeanGccJitIsShared : CodegenM Func := do
+  mkFunction "__lean_gccjit_is_shared" (← uint8_t) #[((← «lean_object*»), "o")] fun blk params => do
+    let obj ← getParam! params 0
+    let st ← getLeanObject
+    let m_rc ← dereferenceField obj st 0
+    mkReturn blk $ ← (← m_rc =/= (1 : UInt64)) ::: (← uint8_t)
+
 def getLeanIsShared : CodegenM Func := do
   mkFunction "lean_is_shared" (← uint8_t) #[((← «lean_object*»), "o")] fun blk params => do
     let obj ← getParam! params 0

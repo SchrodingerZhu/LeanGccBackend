@@ -444,8 +444,7 @@ def emitLit (z : LValue) (t : IRType) (v : LitVal) : FuncM Unit := do
 
 def emitIsShared (z : LValue) (x : VarId) : FuncM Unit := do
   let x ← getIndexVar x
-  let cmp ← (← call (← getLeanIsExclusive) x) === (0 : UInt64)
-  mkAssignmentM z $ ← cmp ::: (← uint8_t)
+  mkAssignmentM z $ ← call (← getLeanGccJitIsShared) x
 
 def emitUnbox (z : LValue) (t : IRType) (x : VarId) : FuncM Unit := do
   let x ← getIndexVar x
