@@ -1452,6 +1452,7 @@ def getLeanArrayGet : CodegenM Func := do
     let isOOB ← unlikely $ ← idx >== size
     ifScalar.endWithConditional none isOOB panic checked
     -- Checked Case
+    mkEval checked $ ← call (← getLeanDec) def_val
     mkReturn checked $ ← call (← getLeanArrayUGet) (a, idx)
 
 def registerMathKernels: CodegenM Unit := do
