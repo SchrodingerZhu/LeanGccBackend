@@ -2,13 +2,14 @@ lakefile.olean: lakefile.lean
 	lake update
 
 LEAN_FILES := $(wildcard LeanGccJit/*.lean)
+GCCJIT_ARGS := -O3 --gccjit-cmdopt=-ffast-math,-fno-semantic-interposition
 
 build/bin/lean-testc: lakefile.olean $(LEAN_FILES)
 	lake build lean-testc
 
 build/tests/gccjit/%.o: tests/%.lean build/bin/lean-testc
 	@mkdir -p build/tests/gccjit
-	build/bin/lean-testc $< $@
+	build/bin/lean-testc $(GCCJIT_ARGS) $< -o $@
 
 build/tests/gccjit/%.exe: build/tests/gccjit/%.o
 	@mkdir -p build/tests/gccjit

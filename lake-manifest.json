@@ -1,4 +1,4 @@
-{"version": 5,
+{"version": 6,
  "packagesDir": "lake-packages",
  "packages":
  [{"git":
@@ -48,4 +48,5 @@
     "opts": {},
     "name": "leanInk",
     "inputRev?": "doc-gen",
-    "inherited": true}}]}
+    "inherited": true}}],
+ "name": "LeanGccBackend"}
